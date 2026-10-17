@@ -1,0 +1,8 @@
+pyqt6>=6.6.0
+pywin32>=306
+pynput>=1.7.6
+vgamepad>=0.1.0
+keyboard>=0.13.5
+Pillow>=10.0.0
+opencv-python>=4.8.0
+pyinstaller>=6.0.0

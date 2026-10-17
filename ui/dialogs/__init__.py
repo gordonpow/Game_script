@@ -1,0 +1,1 @@
+"""GameScript Pro - Dialogs Package"""

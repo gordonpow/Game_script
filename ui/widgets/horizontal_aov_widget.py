@@ -434,7 +434,9 @@ class HorizontalAovNodeItem(QWidget):
                 act_item.triggered.connect(lambda checked, tid=target_n.id: self._set_next_target(tid))
 
         else:
-            menu_trig = menu.addMenu("⚡  調整【If 成立分支】連線至 (右側頂點)...")
+            b_mode = getattr(self._node, "branch_mode", "timer")
+            trig_title = "⏱  調整【計數中 If 通道】連線至 (右側出口)..." if b_mode == "timer" else "⚡  調整【If 成立分支】連線至 (右側出口)..."
+            menu_trig = menu.addMenu(trig_title)
             act_trig_none = menu_trig.addAction("❌ 未指定目標 (僅執行分支內部動作)")
             act_trig_none.setCheckable(True)
             act_trig_none.setChecked(self._node.on_trigger_target_id is None)
@@ -450,7 +452,8 @@ class HorizontalAovNodeItem(QWidget):
                 act_item.setChecked(self._node.on_trigger_target_id == target_n.id)
                 act_item.triggered.connect(lambda checked, tid=target_n.id: self._set_trigger_target(tid))
 
-            menu_cont = menu.addMenu("↪  調整【Else 分支】連線至 (圖1上頂點)...")
+            cont_title = "↪  調整【達標 Else 通道】連線至 (頂部出口)..." if b_mode == "timer" else "↪  調整【Else 分支】連線至 (頂部出口)..."
+            menu_cont = menu.addMenu(cont_title)
             act_cont_def = menu_cont.addAction("🔁 自動依序連線 (預設下一節點)")
             act_cont_def.setCheckable(True)
             act_cont_def.setChecked(self._node.on_continue_target_id is None)
@@ -1385,8 +1388,8 @@ class AovGraphArea(QWidget):
                     self._draw_curve_arrow(painter, p_start, p_end, color, edge_info=edge_dict, port_type="normal")
 
             else:
-                # 分支判斷節點（BRANCH）雙連線：
-                # (1) ⚡ If / 觸發分支 (右側頂點筆直/平滑輸出)
+                branch_mode = getattr(node, "branch_mode", "timer")
+                # (1) ⚡ If 通道 (右側出口：計時器模式下為計數中走此路線)
                 trig_id = node.on_trigger_target_id
                 if trig_id and trig_id in node_item_map:
                     if not (self._is_wiring and self._wiring_source_item == it and self._wiring_port_type == "trigger"):
@@ -1394,9 +1397,10 @@ class AovGraphArea(QWidget):
                         p_start = it.get_trigger_port_pos()
                         p_end = tgt.get_input_port_pos()
                         edge_dict = {"source_item": it, "target_item": tgt, "port_type": "trigger"}
-                        self._draw_curve_arrow(painter, p_start, p_end, QColor("#4ade80"), label="⚡ if", edge_info=edge_dict, port_type="trigger")
+                        lbl = "⏱ 計數中" if branch_mode == "timer" else "⚡ if"
+                        self._draw_curve_arrow(painter, p_start, p_end, QColor("#4ade80"), label=lbl, edge_info=edge_dict, port_type="trigger")
 
-                # (2) ↪ Else / 繼續分支 (如圖 1 頂部 else 直角折線)
+                # (2) ↪ Else 通道 (頂部出口：到達設定秒數走 Else 通道)
                 cont_id = node.on_continue_target_id
                 if cont_id and cont_id in node_item_map:
                     if not (self._is_wiring and self._wiring_source_item == it and self._wiring_port_type == "continue"):
@@ -1404,7 +1408,8 @@ class AovGraphArea(QWidget):
                         p_start = it.get_continue_port_pos()
                         p_end = tgt.get_input_port_pos()
                         edge_dict = {"source_item": it, "target_item": tgt, "port_type": "continue"}
-                        self._draw_curve_arrow(painter, p_start, p_end, QColor("#fb7185"), label="else", edge_info=edge_dict, port_type="continue")
+                        lbl = "else (達標)" if branch_mode == "timer" else "else"
+                        self._draw_curve_arrow(painter, p_start, p_end, QColor("#fb7185"), label=lbl, edge_info=edge_dict, port_type="continue")
 
         # ── 3. 繪製正在拖曳中的連線與磁吸箭頭 ─────────────────
         if self._is_wiring:

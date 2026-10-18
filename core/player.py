@@ -359,6 +359,7 @@ class Player:
             # ── 模式 1: 計時器模式 ──
             if b_mode == "timer":
                 now = time.time()
+                # 🎯 使用者需求：當到了判斷節點時開始計數
                 if var_name not in self._timers:
                     self._timers[var_name] = now
                     # 決定目標數
@@ -367,27 +368,31 @@ class Player:
                         r_max = getattr(node, "random_max", 5.0)
                         target_sec = random.uniform(min(r_min, r_max), max(r_min, r_max))
                         self._timers[f"{var_name}_target"] = target_sec
-                        log_info(f"⏳ [計時器模式] 變數 [{var_name}] 啟動隨機目標計時 ({r_min}~{r_max}s，本輪目標: {target_sec:.2f}s)")
+                        log_info(f"⏳ [計時器模式] 抵達判斷節點，區域變數 [{var_name}] 開始隨機計數 ({r_min}~{r_max}s，本輪目標: {target_sec:.2f}s)")
                     else:
                         target_sec = float(getattr(node, "timer_seconds", 3.0))
                         self._timers[f"{var_name}_target"] = target_sec
-                        log_info(f"⏳ [計時器模式] 變數 [{var_name}] 計時開始 (目標: {target_sec}s)")
+                        log_info(f"⏳ [計時器模式] 抵達判斷節點，區域變數 [{var_name}] 開始計數 (目標: {target_sec}s)")
 
                 target_sec = self._timers.get(f"{var_name}_target", float(getattr(node, "timer_seconds", 3.0)))
                 elapsed = now - self._timers[var_name]
                 self._variables[var_name] = elapsed
 
+                # 🎯 使用者需求：「到達設定秒數 走else通道」
                 if elapsed >= target_sec:
-                    is_condition_met = True
-                    log_info(f"⚡ [計時器模式] 變數 [{var_name}] 數至目標數 ({elapsed:.2f}s >= {target_sec:.2f}s)，觸發 If 分支！")
+                    # 到達設定秒數 ➔ 走 Else 通道 (上方通道)
+                    is_condition_met = False
+                    log_info(f"🏁 [計時器模式] 變數 [{var_name}] 已達設定秒數 ({elapsed:.2f}s >= {target_sec:.2f}s)，走【Else 通道】！")
                     if getattr(node, "auto_reset_on_target", True):
-                        # 數至目標數後自動消除/重置
+                        # 到達設定秒數後消除/重置計數器
                         self._timers.pop(var_name, None)
                         self._timers.pop(f"{var_name}_target", None)
                         self._variables[var_name] = float(getattr(node, "var_init_val", 0.0))
-                        log_debug(f"🔄 [計時器模式] 變數 [{var_name}] 已達目標數，計數器消除重置至初始值")
+                        log_debug(f"🔄 [計時器模式] 變數 [{var_name}] 已達目標數走 Else，計數器消除重置至初始值")
                 else:
-                    log_debug(f"▶ [計時器模式] 變數 [{var_name}] 計時中 ({elapsed:.2f}s / {target_sec:.2f}s)，走 Else 分支")
+                    # 未達設定秒數 (計數中) ➔ 走 If 通道 (右側通道)
+                    is_condition_met = True
+                    log_debug(f"⏳ [計時器模式] 變數 [{var_name}] 計數中 ({elapsed:.2f}s / {target_sec:.2f}s，未達設定秒數)，走【If 通道】")
 
             # ── 模式 2: 區域變數比較大小模式 (Scratch 綠色比較方塊) ──
             else:

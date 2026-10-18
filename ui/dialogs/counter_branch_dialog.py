@@ -300,9 +300,10 @@ class CounterBranchDialog(QDialog):
         else:
             self._rb_fixed.setChecked(True)
 
-        # 消除規則說明
-        lbl_reset_info = QLabel("🔄 消除規則：計數器數至目標數時，自動觸發 If 分支並消除/重置計數器。")
-        lbl_reset_info.setStyleSheet("color: #34d399; font-size: 11px; margin-top: 4px;")
+        # 分支走線與消除規則說明
+        lbl_reset_info = QLabel("⏱️ 分支規則：抵達判斷節點時開始計數，計數中走【If 通道】(右側)；到達設定秒數走【Else 通道】(上方) 並消除重置計數器。")
+        lbl_reset_info.setWordWrap(True)
+        lbl_reset_info.setStyleSheet("color: #38bdf8; font-size: 11px; margin-top: 4px; line-height: 1.4;")
         gt_layout.addWidget(lbl_reset_info)
 
         pt_layout.addWidget(gb_timer)

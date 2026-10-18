@@ -124,6 +124,7 @@ class AovIndicatorWidget(QWidget):
         ]
         painter.setBrush(QBrush(line_color))
         painter.drawPolygon(QPolygon(arrow_pts))
+        painter.end()
 
 
 class NodeWidget(QWidget):

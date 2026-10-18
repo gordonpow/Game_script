@@ -774,16 +774,10 @@ class HorizontalAovNodeItem(QWidget):
         t_enum = self._node.type
         if is_branch:
             var_name = getattr(self._node, "var_name", "X")
-            if branch_mode == "compare":
-                op = getattr(self._node, "compare_op", ">")
-                tgt = getattr(self._node, "compare_target", 50)
-                disp_name = f"判斷 [{var_name} {op} {tgt}]"
-            else:
-                is_rnd = getattr(self._node, "is_random_target", False)
-                if is_rnd:
-                    disp_name = f"計時變數 [{var_name}] 隨機"
-                else:
-                    disp_name = f"計時變數 [{var_name}] {self._node.timer_seconds}s"
+            op = getattr(self._node, "compare_op", ">")
+            tgt = getattr(self._node, "compare_target", 50.0)
+            tgt_str = f"{int(tgt)}" if float(tgt).is_integer() else f"{tgt:.1f}"
+            disp_name = f"判斷 [{var_name} {op} {tgt_str}]"
         elif t_enum in (NodeType.KEY_CLICK, NodeType.KEY_DOWN, NodeType.KEY_UP):
             act = "點擊" if t_enum == NodeType.KEY_CLICK else ("按下" if t_enum == NodeType.KEY_DOWN else "釋放")
             disp_name = f"{act} [{self._node.key.upper()}]"
@@ -814,7 +808,7 @@ class HorizontalAovNodeItem(QWidget):
                 sub_text = f"範圍: 至節點[{end_tag}]" if end_tag else "範圍: 指定結束"
                 is_highlight_time = True
             else:
-                sub_text = "範圍: 達標自動消除"
+                sub_text = "範圍: 持續至結尾"
         elif t_enum == NodeType.KEY_CLICK and getattr(self._node, "key_hold_ms", 0) > 0:
             sub_text = f"按下: {self._node.key_hold_ms}ms"
             is_highlight_time = True
@@ -899,6 +893,8 @@ class HorizontalAovNodeItem(QWidget):
             painter.setBrush(QBrush(QColor("#fb7185")))
             painter.setPen(QPen(QColor("#0f172a"), 1.5))
             painter.drawEllipse(cont_pt, r_c, r_c)
+
+        painter.end()
 
 
 class AovGraphArea(QWidget):
@@ -1259,135 +1255,138 @@ class AovGraphArea(QWidget):
     # ── 畫布繪製：深色網格窗格 + 所有箭頭連線 + 拖曳中拉線 ────
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        w = self.width()
-        h = self.height()
+            w = self.width()
+            h = self.height()
 
-        # ── 1. 繪製深色科技網格窗格 (Grid Pattern) ─────────────
-        painter.fillRect(0, 0, w, h, QColor("#08080f"))
+            # ── 1. 繪製深色科技網格窗格 (Grid Pattern) ─────────────
+            painter.fillRect(0, 0, w, h, QColor("#08080f"))
 
-        pen_grid_fine = QPen(QColor("#131320"), 1, Qt.PenStyle.SolidLine)
-        pen_grid_major = QPen(QColor("#1e1e32"), 1.2, Qt.PenStyle.SolidLine)
+            pen_grid_fine = QPen(QColor("#131320"), 1, Qt.PenStyle.SolidLine)
+            pen_grid_major = QPen(QColor("#1e1e32"), 1.2, Qt.PenStyle.SolidLine)
 
-        for x in range(0, w, GRID_SIZE):
-            painter.setPen(pen_grid_major if x % 100 == 0 else pen_grid_fine)
-            painter.drawLine(x, 0, x, h)
+            for x in range(0, w, GRID_SIZE):
+                painter.setPen(pen_grid_major if x % 100 == 0 else pen_grid_fine)
+                painter.drawLine(x, 0, x, h)
 
-        for y in range(0, h, GRID_SIZE):
-            painter.setPen(pen_grid_major if y % 100 == 0 else pen_grid_fine)
-            painter.drawLine(0, y, w, y)
+            for y in range(0, h, GRID_SIZE):
+                painter.setPen(pen_grid_major if y % 100 == 0 else pen_grid_fine)
+                painter.drawLine(0, y, w, y)
 
-        # ── 2. 繪製所有固定連線與導向箭頭 ─────────────────────
-        self._drawn_edges = []
-        items = self._get_canvas_items()
-        if not items:
-            return
+            # ── 2. 繪製所有固定連線與導向箭頭 ─────────────────────
+            self._drawn_edges = []
+            items = self._get_canvas_items()
+            if not items:
+                return
 
-        node_item_map: Dict[str, HorizontalAovNodeItem] = {it.node.id: it for it in items}
+            node_item_map: Dict[str, HorizontalAovNodeItem] = {it.node.id: it for it in items}
 
-        # ── 2.1 繪製區域變數作用範圍 (Scope Range) 與結束位置標示 ──
-        for it in items:
-            node = it.node
-            if "COUNTER_BRANCH" in str(node.type):
-                end_id = getattr(node, "var_scope_end_node_id", None)
-                var_name = getattr(node, "var_name", "X")
-                if end_id and end_id in node_item_map:
-                    end_it = node_item_map[end_id]
-                    # 計算包覆兩節點之邊界範圍框
-                    min_x = min(it.x(), end_it.x()) - 16
-                    max_x = max(it.x() + it.width(), end_it.x() + end_it.width()) + 16
-                    min_y = min(it.y(), end_it.y()) - 36
-                    max_y = max(it.y() + it.height(), end_it.y() + end_it.height()) + 16
-                    scope_rect = QRect(min_x, min_y, max_x - min_x, max_y - min_y)
+            # ── 2.1 繪製區域變數作用範圍 (Scope Range) 與結束位置標示 ──
+            for it in items:
+                node = it.node
+                if "COUNTER_BRANCH" in str(node.type):
+                    end_id = getattr(node, "var_scope_end_node_id", None)
+                    var_name = getattr(node, "var_name", "X")
+                    if end_id and end_id in node_item_map:
+                        end_it = node_item_map[end_id]
+                        # 計算包覆兩節點之邊界範圍框
+                        min_x = min(it.x(), end_it.x()) - 16
+                        max_x = max(it.x() + it.width(), end_it.x() + end_it.width()) + 16
+                        min_y = min(it.y(), end_it.y()) - 36
+                        max_y = max(it.y() + it.height(), end_it.y() + end_it.height()) + 16
+                        scope_rect = QRect(min_x, min_y, max_x - min_x, max_y - min_y)
 
-                    # 範圍底色與科技虛線邊框
-                    painter.setBrush(QBrush(QColor(34, 197, 94, 20)))
-                    painter.setPen(QPen(QColor(74, 222, 128, 160), 1.8, Qt.PenStyle.DashDotLine))
-                    painter.drawRoundedRect(scope_rect, 10, 10)
+                        # 範圍底色與科技虛線邊框
+                        painter.setBrush(QBrush(QColor(34, 197, 94, 20)))
+                        painter.setPen(QPen(QColor(74, 222, 128, 160), 1.8, Qt.PenStyle.DashDotLine))
+                        painter.drawRoundedRect(scope_rect, 10, 10)
 
-                    # 範圍左上角標籤
-                    lbl_w = 175
-                    lbl_rect = QRect(min_x + 8, min_y - 11, lbl_w, 20)
-                    painter.setBrush(QBrush(QColor("#064e3b")))
-                    painter.setPen(QPen(QColor("#10b981"), 1.2))
-                    painter.drawRoundedRect(lbl_rect, 4, 4)
-                    painter.setPen(QColor("#6ee7b7"))
-                    painter.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
-                    painter.drawText(lbl_rect, Qt.AlignmentFlag.AlignCenter, f"🧩 變數[{var_name}] 作用範圍 ➔")
+                        # 範圍左上角標籤
+                        lbl_w = 175
+                        lbl_rect = QRect(min_x + 8, min_y - 11, lbl_w, 20)
+                        painter.setBrush(QBrush(QColor("#064e3b")))
+                        painter.setPen(QPen(QColor("#10b981"), 1.2))
+                        painter.drawRoundedRect(lbl_rect, 4, 4)
+                        painter.setPen(QColor("#6ee7b7"))
+                        painter.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
+                        painter.drawText(lbl_rect, Qt.AlignmentFlag.AlignCenter, f"🧩 變數[{var_name}] 作用範圍 ➔")
 
-                    # 在結束節點上方標記結束消除徽章 (End Marker)
-                    end_badge_w = 115
-                    end_badge_x = end_it.x() + (end_it.width() - end_badge_w) // 2
-                    end_badge_y = end_it.y() - 30
-                    end_rect = QRect(end_badge_x, end_badge_y, end_badge_w, 22)
-                    painter.setBrush(QBrush(QColor("#450a0a")))
-                    painter.setPen(QPen(QColor("#ef4444"), 1.5))
-                    painter.drawRoundedRect(end_rect, 5, 5)
-                    painter.setPen(QColor("#fca5a5"))
-                    painter.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
-                    painter.drawText(end_rect, Qt.AlignmentFlag.AlignCenter, f"🏁 [{var_name}] 結束消除")
+                        # 在結束節點上方標記結束消除徽章 (End Marker)
+                        end_badge_w = 115
+                        end_badge_x = end_it.x() + (end_it.width() - end_badge_w) // 2
+                        end_badge_y = end_it.y() - 30
+                        end_rect = QRect(end_badge_x, end_badge_y, end_badge_w, 22)
+                        painter.setBrush(QBrush(QColor("#450a0a")))
+                        painter.setPen(QPen(QColor("#ef4444"), 1.5))
+                        painter.drawRoundedRect(end_rect, 5, 5)
+                        painter.setPen(QColor("#fca5a5"))
+                        painter.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
+                        painter.drawText(end_rect, Qt.AlignmentFlag.AlignCenter, f"🏁 [{var_name}] 結束消除")
 
-        for idx, it in enumerate(items):
-            node = it.node
-            t_str = str(node.type)
-            is_branch = ("COUNTER_BRANCH" in t_str)
+            for idx, it in enumerate(items):
+                node = it.node
+                t_str = str(node.type)
+                is_branch = ("COUNTER_BRANCH" in t_str)
 
-            if not is_branch:
-                # 普通節點連線
-                target_id = node.next_node_id
-                target_item = None
-                if target_id == "__END__":
-                    continue
-                elif target_id and target_id in node_item_map:
-                    target_item = node_item_map[target_id]
-                elif target_id is None and idx + 1 < len(items):
-                    target_item = items[idx + 1]
-
-                if target_item:
-                    # 若正在拔線重接此連線，暫時隱藏固定連線
-                    if self._is_wiring and self._wiring_source_item == it and self._wiring_port_type == "normal":
+                if not is_branch:
+                    # 普通節點連線
+                    target_id = node.next_node_id
+                    target_item = None
+                    if target_id == "__END__":
                         continue
-                    p_start = it.get_output_port_pos()
-                    p_end = target_item.get_input_port_pos()
-                    color = QColor("#38bdf8") if not it._is_executing else QColor("#facc15")
-                    edge_dict = {"source_item": it, "target_item": target_item, "port_type": "normal"}
-                    self._draw_curve_arrow(painter, p_start, p_end, color, edge_info=edge_dict, port_type="normal")
+                    elif target_id and target_id in node_item_map:
+                        target_item = node_item_map[target_id]
+                    elif target_id is None and idx + 1 < len(items):
+                        target_item = items[idx + 1]
 
-            else:
-                # (1) ⚡ If 通道 (右側出口：滿足條件走此路線)
-                trig_id = node.on_trigger_target_id
-                if trig_id and trig_id in node_item_map:
-                    if not (self._is_wiring and self._wiring_source_item == it and self._wiring_port_type == "trigger"):
-                        tgt = node_item_map[trig_id]
-                        p_start = it.get_trigger_port_pos()
-                        p_end = tgt.get_input_port_pos()
-                        edge_dict = {"source_item": it, "target_item": tgt, "port_type": "trigger"}
-                        self._draw_curve_arrow(painter, p_start, p_end, QColor("#4ade80"), label="⚡ if", edge_info=edge_dict, port_type="trigger")
+                    if target_item:
+                        # 若正在拔線重接此連線，暫時隱藏固定連線
+                        if self._is_wiring and self._wiring_source_item == it and self._wiring_port_type == "normal":
+                            continue
+                        p_start = it.get_output_port_pos()
+                        p_end = target_item.get_input_port_pos()
+                        color = QColor("#38bdf8") if not it._is_executing else QColor("#facc15")
+                        edge_dict = {"source_item": it, "target_item": target_item, "port_type": "normal"}
+                        self._draw_curve_arrow(painter, p_start, p_end, color, edge_info=edge_dict, port_type="normal")
 
-                # (2) ↪ Else 通道 (頂部出口：不滿足條件走 Else 通道)
-                cont_id = node.on_continue_target_id
-                if cont_id and cont_id in node_item_map:
-                    if not (self._is_wiring and self._wiring_source_item == it and self._wiring_port_type == "continue"):
-                        tgt = node_item_map[cont_id]
-                        p_start = it.get_continue_port_pos()
-                        p_end = tgt.get_input_port_pos()
-                        edge_dict = {"source_item": it, "target_item": tgt, "port_type": "continue"}
-                        self._draw_curve_arrow(painter, p_start, p_end, QColor("#fb7185"), label="else", edge_info=edge_dict, port_type="continue")
+                else:
+                    # (1) ⚡ If 通道 (右側出口：滿足條件走此路線)
+                    trig_id = node.on_trigger_target_id
+                    if trig_id and trig_id in node_item_map:
+                        if not (self._is_wiring and self._wiring_source_item == it and self._wiring_port_type == "trigger"):
+                            tgt = node_item_map[trig_id]
+                            p_start = it.get_trigger_port_pos()
+                            p_end = tgt.get_input_port_pos()
+                            edge_dict = {"source_item": it, "target_item": tgt, "port_type": "trigger"}
+                            self._draw_curve_arrow(painter, p_start, p_end, QColor("#4ade80"), label="⚡ if", edge_info=edge_dict, port_type="trigger")
 
-        # ── 3. 繪製正在拖曳中的連線與磁吸箭頭 ─────────────────
-        if self._is_wiring:
-            if self._snapped_target_item:
-                wire_color = QColor("#4ade80")
-            elif self._wiring_port_type == "trigger":
-                wire_color = QColor("#4ade80")
-            elif self._wiring_port_type == "continue":
-                wire_color = QColor("#fb7185")
-            else:
-                wire_color = QColor("#38bdf8")
+                    # (2) ↪ Else 通道 (頂部出口：不滿足條件走 Else 通道)
+                    cont_id = node.on_continue_target_id
+                    if cont_id and cont_id in node_item_map:
+                        if not (self._is_wiring and self._wiring_source_item == it and self._wiring_port_type == "continue"):
+                            tgt = node_item_map[cont_id]
+                            p_start = it.get_continue_port_pos()
+                            p_end = tgt.get_input_port_pos()
+                            edge_dict = {"source_item": it, "target_item": tgt, "port_type": "continue"}
+                            self._draw_curve_arrow(painter, p_start, p_end, QColor("#fb7185"), label="else", edge_info=edge_dict, port_type="continue")
 
-            label = "⚡ if" if self._wiring_port_type == "trigger" else ("else" if self._wiring_port_type == "continue" else "")
-            self._draw_curve_arrow(painter, self._wiring_start_pt, self._wiring_current_pt, wire_color, label=label, is_wiring=True, port_type=self._wiring_port_type)
+            # ── 3. 繪製正在拖曳中的連線與磁吸箭頭 ─────────────────
+            if self._is_wiring:
+                if self._snapped_target_item:
+                    wire_color = QColor("#4ade80")
+                elif self._wiring_port_type == "trigger":
+                    wire_color = QColor("#4ade80")
+                elif self._wiring_port_type == "continue":
+                    wire_color = QColor("#fb7185")
+                else:
+                    wire_color = QColor("#38bdf8")
+
+                label = "⚡ if" if self._wiring_port_type == "trigger" else ("else" if self._wiring_port_type == "continue" else "")
+                self._draw_curve_arrow(painter, self._wiring_start_pt, self._wiring_current_pt, wire_color, label=label, is_wiring=True, port_type=self._wiring_port_type)
+        finally:
+            painter.end()
 
     def _draw_curve_arrow(
         self,

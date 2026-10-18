@@ -1135,10 +1135,10 @@ class AovGraphArea(QWidget):
                 if self._selected_edge is not None:
                     self._selected_edge = None
                     self.update()
-                # 點擊在畫布完全空白處 ➔ 支援直接拖曳平移畫布 (draw.io 經典手勢)
-                self._is_panning = True
-                self._pan_start_pos = event.globalPosition().toPoint()
-                self.setCursor(Qt.CursorShape.ClosedHandCursor)
+                if self._canvas:
+                    self._canvas.clear_node_selection()
+                # 🎯 使用者核心要求：左鍵拖曳是移動節點與箭頭位置！不能平移畫布！
+                # 左鍵點擊空白處僅清除選取，絕對不啟動平移
                 event.accept()
                 return
 

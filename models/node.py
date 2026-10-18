@@ -23,7 +23,7 @@ class NodeType(str, Enum):
     GAMEPAD_AXIS    = "GAMEPAD_AXIS"    # 搖桿軸推送
     REPEAT_BLOCK    = "REPEAT_BLOCK"    # 重複N次子序列
     WAIT_USER_KEY   = "WAIT_USER_KEY"   # 等待使用者按鍵
-    COUNTER_BRANCH  = "COUNTER_BRANCH"  # 計時/計數器雙輸出分支 (變數X, 觸發/未觸發)
+    COUNTER_BRANCH  = "COUNTER_BRANCH"  # Scratch 雙輸出變數比較分支 (If / Else)
 
 
 class MouseButton(str, Enum):
@@ -123,8 +123,8 @@ class MacroNode:
     # ── 錄製時間戳 ──
     timestamp_ms: int = 0                   # 相對錄製開始的時間
 
-    # ── 雙輸出計時/比較分支器欄位 (支援 Scratch 形式) ──
-    branch_mode: str = "timer"              # 分支模式: "timer" (計時器模式), "compare" (區域變數比較大小)
+    # ── 雙輸出變數比較分支器欄位 (Scratch 形式) ──
+    branch_mode: str = "compare"            # 分支模式: "compare" (區域變數比較大小)
     var_name: str = "X"                     # 區域變數名稱
     var_init_val: float = 0.0               # 初始值 (預設為 0)
     var_scope_end_node_id: Optional[str] = None  # 區域範圍結束位置節點 ID (標示結束位置並消除)
@@ -185,16 +185,10 @@ class MacroNode:
             key_str = f"[{self.wait_key}]" if self.wait_key else "任意鍵"
             return f"等待使用者按 {key_str}"
         elif t == NodeType.COUNTER_BRANCH:
-            b_mode = getattr(self, "branch_mode", "timer")
-            if b_mode == "compare":
-                op = getattr(self, "compare_op", ">")
-                tgt = getattr(self, "compare_target", 50.0)
-                tgt_str = f"{int(tgt)}" if tgt.is_integer() else f"{tgt:.1f}"
-                return f"判斷 [{self.var_name} {op} {tgt_str}]"
-            else:
-                if getattr(self, "is_random_target", False):
-                    return f"計時變數 [{self.var_name}: {self.random_min}~{self.random_max}s]"
-                return f"計時變數 [{self.var_name}: {self.timer_seconds}s]"
+            op = getattr(self, "compare_op", ">")
+            tgt = getattr(self, "compare_target", 50.0)
+            tgt_str = f"{int(tgt)}" if tgt.is_integer() else f"{tgt:.1f}"
+            return f"變數比較 [{self.var_name} {op} {tgt_str}]"
         return t
 
     def to_dict(self) -> Dict[str, Any]:

@@ -227,12 +227,12 @@ class ToolboxPanel(QWidget):
             c_layout.addWidget(card)
 
         # ── 5. 雙輸出分支與迴圈 ──
-        lbl_sec_b = QLabel("⏳ 雙輸出分支與控制")
-        lbl_sec_b.setStyleSheet("font-size: 11px; font-weight: bold; color: #fbbf24; margin-top: 6px;")
+        lbl_sec_b = QLabel("🔀 分支條件與控制")
+        lbl_sec_b.setStyleSheet("font-size: 11px; font-weight: bold; color: #4ade80; margin-top: 6px;")
         c_layout.addWidget(lbl_sec_b)
 
         branch_items = [
-            (NodeType.COUNTER_BRANCH, "計時變數 X", "雙輸出: 達X秒觸發/繼續", "#fbbf24", "⏳"),
+            (NodeType.COUNTER_BRANCH, "變數比較 (If/Else)", "Scratch 雙輸出: 滿足/不滿足", "#15803d", "🔀"),
             (NodeType.REPEAT_BLOCK,   "重複迴圈", "重複執行子動作區塊", "#f59e0b", "↺"),
         ]
         for nt, t, sub, col, ic in branch_items:

@@ -1,9 +1,9 @@
 """
-Scratch 形式 If-Else 條件判斷分支對話框 (支援計時器模式與變數比較大小模式)
-- 參照 Scratch 綠色六角形積木視覺設計 ( ( ) > 50, ( ) < 50, ( ) = 50 )
-- 支援左側功能積木庫點選/移入直接套用條件
-- 模式 1：計時器模式 (自定義區域變數、初始值0、自定義隨機範圍目標數、達標消除、標示結束位置)
-- 模式 2：區域變數比較大小模式 (比較運算子與目標數)
+Scratch 形式 If-Else 條件判斷分支對話框 (區域變數比較大小模式)
+- 參照 Scratch 經典綠色六角形積木視覺設計 ( ( ) > 50, ( ) < 50, ( ) = 50 等 )
+- 支援左側功能積木庫點選直接套用比較條件
+- 自定義區域變數名稱與初始值 (預設為 0)
+- 可選定區域變數作用範圍並在節點圖中標示結束消除位置
 """
 from __future__ import annotations
 from typing import Optional, List
@@ -12,8 +12,7 @@ from copy import deepcopy
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QLineEdit, QDoubleSpinBox, QComboBox,
-    QGroupBox, QRadioButton, QButtonGroup, QStackedWidget,
-    QWidget, QFrame, QScrollArea
+    QGroupBox, QWidget, QFrame, QScrollArea
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QColor, QPainter, QPainterPath
@@ -75,7 +74,7 @@ class ScratchBlockWidget(QFrame):
 
 class CounterBranchDialog(QDialog):
     """
-    Scratch 形式 If-Else 條件分支設定面板
+    Scratch 形式 If-Else 條件分支設定面板 (區域變數比較大小)
     """
     def __init__(self, node: MacroNode, all_nodes: Optional[List[MacroNode]] = None, parent=None):
         super().__init__(parent)
@@ -86,8 +85,8 @@ class CounterBranchDialog(QDialog):
         if not self._all_nodes and parent and hasattr(parent, "_macro") and parent._macro:
             self._all_nodes = parent._macro.nodes
 
-        self.setWindowTitle("🔀 設定 If-Else 條件分支 (Scratch 積木模式)")
-        self.resize(760, 560)
+        self.setWindowTitle("🔀 設定 If-Else 條件分支 (Scratch 區域變數比較)")
+        self.resize(760, 520)
         self.setStyleSheet(f"""
             QDialog {{
                 background-color: {COLORS['bg_primary']};
@@ -119,16 +118,6 @@ class CounterBranchDialog(QDialog):
             QLineEdit:focus, QDoubleSpinBox:focus, QComboBox:focus {{
                 border-color: #38bdf8;
             }}
-            QRadioButton {{
-                color: #e2e8f0;
-                font-size: 13px;
-                font-weight: bold;
-                spacing: 6px;
-            }}
-            QRadioButton::indicator {{
-                width: 16px;
-                height: 16px;
-            }}
         """)
 
         self._setup_ui()
@@ -138,7 +127,7 @@ class CounterBranchDialog(QDialog):
         main_layout.setSpacing(12)
         main_layout.setContentsMargins(18, 16, 18, 16)
 
-        # ── 1. 頂部模式選擇與導覽 ──────────────────────────
+        # ── 1. 頂部模式導覽 ──────────────────────────
         top_bar = QFrame()
         top_bar.setStyleSheet(f"background: {COLORS['bg_secondary']}; border: 1px solid {COLORS['border']}; border-radius: 8px;")
         tb_layout = QHBoxLayout(top_bar)
@@ -149,19 +138,9 @@ class CounterBranchDialog(QDialog):
         icon_lbl.setStyleSheet("font-size: 22px;")
         tb_layout.addWidget(icon_lbl)
 
-        mode_title = QLabel("判斷模式：")
-        mode_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #ffffff;")
+        mode_title = QLabel("判斷模式：Scratch 區域變數比較大小 (Diamond If / Else)")
+        mode_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #4ade80;")
         tb_layout.addWidget(mode_title)
-
-        self._combo_mode = QComboBox()
-        self._combo_mode.addItem("⏱️  模式 1：計時器模式 (Timer Mode)", "timer")
-        self._combo_mode.addItem("🔢  模式 2：區域變數比較大小 (Scratch 比較積木)", "compare")
-        self._combo_mode.setStyleSheet("font-size: 13px; font-weight: bold; padding: 6px 14px; min-width: 320px;")
-        curr_mode = getattr(self._node, "branch_mode", "timer")
-        idx = 0 if curr_mode == "timer" else 1
-        self._combo_mode.setCurrentIndex(idx)
-        self._combo_mode.currentIndexChanged.connect(self._on_mode_changed)
-        tb_layout.addWidget(self._combo_mode)
 
         tb_layout.addStretch()
         main_layout.addWidget(top_bar)
@@ -182,7 +161,7 @@ class CounterBranchDialog(QDialog):
         lt_hint.setWordWrap(True)
         lt_layout.addWidget(lt_hint)
 
-        # 建立積木群組
+        # 建立積木群組 (Scratch 六角形比較積木)
         b_gt = ScratchBlockWidget("  >  50", "compare_op", ">")
         b_gt.clicked.connect(self._on_scratch_block_clicked)
         lt_layout.addWidget(b_gt)
@@ -199,24 +178,24 @@ class CounterBranchDialog(QDialog):
         b_gte.clicked.connect(self._on_scratch_block_clicked)
         lt_layout.addWidget(b_gte)
 
-        b_timer = ScratchBlockWidget("⏱ 達 3.0 秒", "timer_fixed", 3.0)
-        b_timer.clicked.connect(self._on_scratch_block_clicked)
-        lt_layout.addWidget(b_timer)
+        b_lte = ScratchBlockWidget("  <= 50", "compare_op", "<=")
+        b_lte.clicked.connect(self._on_scratch_block_clicked)
+        lt_layout.addWidget(b_lte)
 
-        b_random = ScratchBlockWidget("🎲 隨機 1~5 秒", "timer_random", (1.0, 5.0))
-        b_random.clicked.connect(self._on_scratch_block_clicked)
-        lt_layout.addWidget(b_random)
+        b_neq = ScratchBlockWidget("  != 50", "compare_op", "!=")
+        b_neq.clicked.connect(self._on_scratch_block_clicked)
+        lt_layout.addWidget(b_neq)
 
         lt_layout.addStretch()
         content_layout.addWidget(left_toolbox)
 
-        # ── 右側：屬性設定面板 (含區域變數 + 模式參數 + 結束位置) ──
+        # ── 右側：屬性設定面板 (含區域變數 + 比較條件 + 結束位置) ──
         right_panel = QWidget()
         rp_layout = QVBoxLayout(right_panel)
         rp_layout.setContentsMargins(0, 0, 0, 0)
         rp_layout.setSpacing(10)
 
-        # (A) 共通：區域變數定義區
+        # (A) 區域變數定義區
         gb_var = QGroupBox("1. 區域變數定義 (Local Variable)")
         v_layout = QHBoxLayout(gb_var)
         v_layout.setSpacing(12)
@@ -225,7 +204,7 @@ class CounterBranchDialog(QDialog):
         lbl_vn = QLabel("變數名稱：")
         self._edit_var = QLineEdit(getattr(self._node, "var_name", "X") or "X")
         self._edit_var.setFixedWidth(80)
-        self._edit_var.setToolTip("自訂區域變數名稱，例如 X, timer1, count")
+        self._edit_var.setToolTip("自訂區域變數名稱，例如 X, count, score")
 
         lbl_vi = QLabel("初始值 (預設為 0)：")
         self._spin_init_val = QDoubleSpinBox()
@@ -240,81 +219,7 @@ class CounterBranchDialog(QDialog):
         v_layout.addStretch()
         rp_layout.addWidget(gb_var)
 
-        # (B) 模式專屬參數 (堆疊切換)
-        self._stack = QStackedWidget()
-
-        # ── 模式 1 頁面：計時器模式 ──
-        page_timer = QWidget()
-        pt_layout = QVBoxLayout(page_timer)
-        pt_layout.setContentsMargins(0, 0, 0, 0)
-        pt_layout.setSpacing(10)
-
-        gb_timer = QGroupBox("2. ⏱ 計時器條件與消除規則")
-        gt_layout = QVBoxLayout(gb_timer)
-        gt_layout.setSpacing(10)
-        gt_layout.setContentsMargins(14, 16, 14, 12)
-
-        # 目標數切換
-        self._rb_fixed = QRadioButton("固定目標數：")
-        self._rb_random = QRadioButton("自定義隨機目標數 (隨機區間)：")
-
-        self._spin_fixed_sec = QDoubleSpinBox()
-        self._spin_fixed_sec.setRange(0.1, 999.0)
-        self._spin_fixed_sec.setValue(float(getattr(self._node, "timer_seconds", 3.0) or 3.0))
-        self._spin_fixed_sec.setSuffix(" 秒")
-        self._spin_fixed_sec.setFixedWidth(110)
-
-        row_fixed = QHBoxLayout()
-        row_fixed.addWidget(self._rb_fixed)
-        row_fixed.addWidget(self._spin_fixed_sec)
-        row_fixed.addStretch()
-        gt_layout.addLayout(row_fixed)
-
-        self._spin_rand_min = QDoubleSpinBox()
-        self._spin_rand_min.setRange(0.1, 999.0)
-        self._spin_rand_min.setValue(float(getattr(self._node, "random_min", 1.0)))
-        self._spin_rand_min.setSuffix(" 秒")
-        self._spin_rand_min.setFixedWidth(90)
-
-        lbl_to = QLabel("至")
-        lbl_to.setStyleSheet("color: #94a3b8;")
-
-        self._spin_rand_max = QDoubleSpinBox()
-        self._spin_rand_max.setRange(0.1, 999.0)
-        self._spin_rand_max.setValue(float(getattr(self._node, "random_max", 5.0)))
-        self._spin_rand_max.setSuffix(" 秒")
-        self._spin_rand_max.setFixedWidth(90)
-
-        row_random = QHBoxLayout()
-        row_random.addWidget(self._rb_random)
-        row_random.addWidget(self._spin_rand_min)
-        row_random.addWidget(lbl_to)
-        row_random.addWidget(self._spin_rand_max)
-        row_random.addStretch()
-        gt_layout.addLayout(row_random)
-
-        # 初始單選狀態
-        is_rand = getattr(self._node, "is_random_target", False)
-        if is_rand:
-            self._rb_random.setChecked(True)
-        else:
-            self._rb_fixed.setChecked(True)
-
-        # 分支走線與消除規則說明
-        lbl_reset_info = QLabel("⏱️ 分支規則：抵達判斷節點時開始計數，計數中走【If 通道】(右側)；到達設定秒數走【Else 通道】(上方) 並消除重置計數器。")
-        lbl_reset_info.setWordWrap(True)
-        lbl_reset_info.setStyleSheet("color: #38bdf8; font-size: 11px; margin-top: 4px; line-height: 1.4;")
-        gt_layout.addWidget(lbl_reset_info)
-
-        pt_layout.addWidget(gb_timer)
-        self._stack.addWidget(page_timer)
-
-        # ── 模式 2 頁面：區域變數比較大小 ──
-        page_compare = QWidget()
-        pc_layout = QVBoxLayout(page_compare)
-        pc_layout.setContentsMargins(0, 0, 0, 0)
-        pc_layout.setSpacing(10)
-
+        # (B) Scratch 比較條件插槽
         gb_comp = QGroupBox("2. 🔢 區域變數比較大小判斷 (Scratch 六角比較積木)")
         gc_layout = QVBoxLayout(gb_comp)
         gc_layout.setSpacing(12)
@@ -379,15 +284,9 @@ class CounterBranchDialog(QDialog):
         )
         lbl_comp_desc.setStyleSheet("color: #94a3b8; font-size: 11px;")
         gc_layout.addWidget(lbl_comp_desc)
+        rp_layout.addWidget(gb_comp)
 
-        pc_layout.addWidget(gb_comp)
-        self._stack.addWidget(page_compare)
-
-        # 依初始模式設定 Stack
-        self._stack.setCurrentIndex(0 if curr_mode == "timer" else 1)
-        rp_layout.addWidget(self._stack)
-
-        # (C) 共通：區域範圍與結束位置標示
+        # (C) 區域範圍與結束位置標示
         gb_scope = QGroupBox("3. 🏁 區域變數之區域範圍 (在節點圖中標示結束位置)")
         s_layout = QVBoxLayout(gb_scope)
         s_layout.setSpacing(6)
@@ -459,47 +358,25 @@ class CounterBranchDialog(QDialog):
         # 變數名同步更新至綠色積木
         self._edit_var.textChanged.connect(lambda txt: self._lbl_slot_var.setText(txt or "X"))
 
-    def _on_mode_changed(self, idx: int):
-        self._stack.setCurrentIndex(idx)
-
     def _on_scratch_block_clicked(self, block_type: str, payload: object):
-        """點擊左側 Scratch 積木時自動切換並填入右側設定"""
+        """點擊左側 Scratch 積木時填入右側設定"""
         if block_type == "compare_op":
-            self._combo_mode.setCurrentIndex(1)
             op = str(payload)
             if op == "==":
                 op = "="
             self._combo_op.setCurrentText(op)
-        elif block_type == "timer_fixed":
-            self._combo_mode.setCurrentIndex(0)
-            self._rb_fixed.setChecked(True)
-            self._spin_fixed_sec.setValue(float(payload))
-        elif block_type == "timer_random":
-            self._combo_mode.setCurrentIndex(0)
-            self._rb_random.setChecked(True)
-            min_v, max_v = payload
-            self._spin_rand_min.setValue(min_v)
-            self._spin_rand_max.setValue(max_v)
 
     def _save_and_close(self):
-        # 儲存模式
-        mode_data = self._combo_mode.currentData()
-        self._node.branch_mode = mode_data
+        # 儲存純粹 Scratch 變數比較模式
+        self._node.branch_mode = "compare"
         self._node.var_name = self._edit_var.text().strip() or "X"
         self._node.var_init_val = self._spin_init_val.value()
 
-        if mode_data == "timer":
-            self._node.is_random_target = self._rb_random.isChecked()
-            self._node.timer_seconds = self._spin_fixed_sec.value()
-            self._node.random_min = self._spin_rand_min.value()
-            self._node.random_max = self._spin_rand_max.value()
-            self._node.auto_reset_on_target = True
-        else:
-            op_text = self._combo_op.currentText()
-            if op_text == "=":
-                op_text = "=="
-            self._node.compare_op = op_text
-            self._node.compare_target = self._spin_comp_target.value()
+        op_text = self._combo_op.currentText()
+        if op_text == "=":
+            op_text = "=="
+        self._node.compare_op = op_text
+        self._node.compare_target = self._spin_comp_target.value()
 
         # 結束節點 ID
         end_id = self._combo_end_node.currentData()
@@ -509,3 +386,4 @@ class CounterBranchDialog(QDialog):
 
     def get_node(self) -> MacroNode:
         return self._node
+

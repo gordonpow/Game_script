@@ -31,7 +31,7 @@ class NodeConfigDialog(QDialog):
         ("🕹️  手把搖桿推桿 (Gamepad Axis)",  NodeType.GAMEPAD_AXIS),
         ("⏱️  固定時間等待 (Wait Fixed)",    NodeType.WAIT_FIXED),
         ("🎲  隨機時間等待 (Wait Random)",   NodeType.WAIT_RANDOM),
-        ("⏳  計時變數 X (雙輸出分支)",      NodeType.COUNTER_BRANCH),
+        ("🔀  變數比較 If/Else (雙輸出分支)", NodeType.COUNTER_BRANCH),
         ("↺   重複迴圈 (Repeat Block)",     NodeType.REPEAT_BLOCK),
     ]
 
@@ -284,24 +284,26 @@ class NodeConfigDialog(QDialog):
 
         elif "COUNTER_BRANCH" in t_str:
             self._branch_var = QLineEdit(getattr(self._node, "var_name", "X") or "X")
-            self._branch_var.setPlaceholderText("例如: X, timer_1, skill_cd")
-            self._form_layout.addRow("計時變數名稱：", self._branch_var)
+            self._branch_var.setPlaceholderText("例如: X, count, score")
+            self._form_layout.addRow("變數名稱：", self._branch_var)
 
-            self._branch_sec = QDoubleSpinBox()
-            self._branch_sec.setRange(0.1, 999.0)
-            self._branch_sec.setSingleStep(0.5)
-            self._branch_sec.setDecimals(1)
-            self._branch_sec.setSuffix(" 秒")
-            self._branch_sec.setValue(float(getattr(self._node, "timer_seconds", 3.0)))
-            self._form_layout.addRow("目標計時 X：", self._branch_sec)
+            self._branch_init_val = QDoubleSpinBox()
+            self._branch_init_val.setRange(-99999.0, 99999.0)
+            self._branch_init_val.setValue(float(getattr(self._node, "var_init_val", 0.0)))
+            self._form_layout.addRow("初始值：", self._branch_init_val)
 
-            self._branch_trig = QComboBox()
-            self._branch_trig.addItem("⏳ 時間達到 X 秒 (timeout)", "timeout")
-            self._branch_trig.addItem("⌨ 按鍵放開時觸發 (key_release)", "key_release")
-            idx = self._branch_trig.findData(getattr(self._node, "trigger_type", "timeout"))
-            if idx >= 0:
-                self._branch_trig.setCurrentIndex(idx)
-            self._form_layout.addRow("觸發條件：", self._branch_trig)
+            self._branch_op = QComboBox()
+            self._branch_op.addItems([">", "<", "=", ">=", "<=", "!="])
+            curr_op = getattr(self._node, "compare_op", ">")
+            if curr_op == "==":
+                curr_op = "="
+            self._branch_op.setCurrentText(curr_op)
+            self._form_layout.addRow("比較運算子：", self._branch_op)
+
+            self._branch_target = QDoubleSpinBox()
+            self._branch_target.setRange(-99999.0, 99999.0)
+            self._branch_target.setValue(float(getattr(self._node, "compare_target", 50.0)))
+            self._form_layout.addRow("比較目標值：", self._branch_target)
 
     def _on_ok(self):
         """將表單值寫回節點"""
@@ -366,10 +368,16 @@ class NodeConfigDialog(QDialog):
         elif "COUNTER_BRANCH" in t_str:
             if hasattr(self, "_branch_var"):
                 self._node.var_name = self._branch_var.text().strip() or "X"
-            if hasattr(self, "_branch_sec"):
-                self._node.timer_seconds = self._branch_sec.value()
-            if hasattr(self, "_branch_trig"):
-                self._node.trigger_type = self._branch_trig.currentData()
+            if hasattr(self, "_branch_init_val"):
+                self._node.var_init_val = self._branch_init_val.value()
+            if hasattr(self, "_branch_op"):
+                op = self._branch_op.currentText()
+                if op == "=":
+                    op = "=="
+                self._node.compare_op = op
+            if hasattr(self, "_branch_target"):
+                self._node.compare_target = self._branch_target.value()
+            self._node.branch_mode = "compare"
 
         self._node.comment = self._comment.text().strip()
         self.accept()

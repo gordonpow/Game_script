@@ -382,23 +382,10 @@ class HorizontalAovNodeItem(QWidget):
         t_str = str(self._node.type)
         is_branch = ("COUNTER_BRANCH" in t_str)
 
-        # 1. 編輯動作與模式切換
+        # 1. 編輯動作
         if is_branch:
             act_edit = menu.addAction("⚙️  設定判斷條件與屬性 (Scratch 設定介面)...")
             act_edit.triggered.connect(lambda: self.edit_requested.emit(self._node))
-
-            menu.addSeparator()
-
-            curr_mode = getattr(self._node, "branch_mode", "timer")
-            act_mode_timer = menu.addAction("⏱️  切換模式 ➔ 計時器模式 (Timer Mode)")
-            act_mode_timer.setCheckable(True)
-            act_mode_timer.setChecked(curr_mode == "timer")
-            act_mode_timer.triggered.connect(lambda: self._set_branch_mode("timer"))
-
-            act_mode_comp = menu.addAction("🔢  切換模式 ➔ 區域變數比較大小 (Scratch > < =)")
-            act_mode_comp.setCheckable(True)
-            act_mode_comp.setChecked(curr_mode == "compare")
-            act_mode_comp.triggered.connect(lambda: self._set_branch_mode("compare"))
         else:
             act_edit = menu.addAction("✏  更改鍵位 / 編輯屬性")
             act_edit.triggered.connect(lambda: self.edit_requested.emit(self._node))
@@ -547,8 +534,9 @@ class HorizontalAovNodeItem(QWidget):
                 self._node.duration_ms = 500
         elif target_type == NodeType.COUNTER_BRANCH:
             self._node.var_name = "X"
-            self._node.timer_seconds = 3.0
-            self._node.trigger_type = "timeout"
+            self._node.branch_mode = "compare"
+            self._node.compare_op = ">"
+            self._node.compare_target = 50.0
         self.edit_requested.emit(self._node)
 
     def _insert_after_type(self, node_type: NodeType):
@@ -559,14 +547,6 @@ class HorizontalAovNodeItem(QWidget):
             y = self.y()
             zoom = getattr(graph_area._canvas, "_zoom_factor", 1.0)
             graph_area._canvas.add_node_at_pos_requested.emit(node_type, x / zoom, y / zoom)
-
-    def _set_branch_mode(self, mode: str):
-        """切換分支模式 (timer / compare)"""
-        self._node.branch_mode = mode
-        self.connection_changed.emit(self._node)
-        self.update()
-        if self.parent():
-            self.parent().update()
 
     def _set_next_target(self, tid: Optional[str]):
         self._node.next_node_id = tid
@@ -608,16 +588,11 @@ class HorizontalAovNodeItem(QWidget):
             painter.drawRoundedRect(bg_sel, 8, 8)
 
         # 2. 決定節點色彩
-        branch_mode = getattr(self._node, "branch_mode", "timer")
         d_size = 28  # 菱形尺寸
 
         if is_branch:
-            if branch_mode == "compare":
-                circle_color = QColor("#15803d")  # Scratch 經典綠 (Compare 模式)
-                border_color = QColor("#4ade80")
-            else:
-                circle_color = QColor("#b45309")  # 計時琥珀金色 (Timer 模式)
-                border_color = QColor("#fde047")
+            circle_color = QColor("#15803d")  # Scratch 經典綠 (變數比較 If/Else)
+            border_color = QColor("#4ade80")
         elif "GAMEPAD" in t_str:
             circle_color = QColor("#c084fc")  # 搖桿：粉紫
             border_color = QColor("#9333ea")
@@ -711,19 +686,11 @@ class HorizontalAovNodeItem(QWidget):
             font_diamond_title = QFont("Consolas", 8, QFont.Weight.Bold)
             painter.setFont(font_diamond_title)
 
-            if branch_mode == "compare":
-                op = getattr(self._node, "compare_op", ">")
-                target = getattr(self._node, "compare_target", 50)
-                line1 = f"{var_name}"
-                line2 = f"{op} {target}"
-            else:
-                is_rnd = getattr(self._node, "is_random_target", False)
-                if is_rnd:
-                    line1 = f"🎲{var_name}"
-                    line2 = f"{getattr(self._node, 'random_min', 1.0)}~{getattr(self._node, 'random_max', 5.0)}s"
-                else:
-                    line1 = f"⏱{var_name}"
-                    line2 = f"{getattr(self._node, 'timer_seconds', 3.0)}s"
+            op = getattr(self._node, "compare_op", ">")
+            target = getattr(self._node, "compare_target", 50.0)
+            target_str = f"{int(target)}" if float(target).is_integer() else f"{target:.1f}"
+            line1 = f"{var_name}"
+            line2 = f"{op} {target_str}"
 
             # 繪製內部兩行精準置中文字
             painter.drawText(QRect(cx - d_size + 2, cy - 14, (d_size - 2) * 2, 13), Qt.AlignmentFlag.AlignCenter, line1)
@@ -1251,7 +1218,7 @@ class AovGraphArea(QWidget):
         act_wait_r.triggered.connect(lambda: self._request_add_node(NodeType.WAIT_RANDOM, click_world_x, click_world_y))
 
         # ── 5. 雙輸出分支 ──
-        act_branch = menu.addAction("⏳  新增計時變數 X (雙輸出分支)")
+        act_branch = menu.addAction("🔀  新增區域變數比較 (Scratch 雙輸出分支)")
         act_branch.triggered.connect(lambda: self._request_add_node(NodeType.COUNTER_BRANCH, click_world_x, click_world_y))
 
         menu.addSeparator()
@@ -1347,7 +1314,7 @@ class AovGraphArea(QWidget):
                     painter.drawRoundedRect(lbl_rect, 4, 4)
                     painter.setPen(QColor("#6ee7b7"))
                     painter.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
-                    painter.drawText(lbl_rect, Qt.AlignmentFlag.AlignCenter, f"⏱️ 變數[{var_name}] 作用範圍 ➔")
+                    painter.drawText(lbl_rect, Qt.AlignmentFlag.AlignCenter, f"🧩 變數[{var_name}] 作用範圍 ➔")
 
                     # 在結束節點上方標記結束消除徽章 (End Marker)
                     end_badge_w = 115
@@ -1388,8 +1355,7 @@ class AovGraphArea(QWidget):
                     self._draw_curve_arrow(painter, p_start, p_end, color, edge_info=edge_dict, port_type="normal")
 
             else:
-                branch_mode = getattr(node, "branch_mode", "timer")
-                # (1) ⚡ If 通道 (右側出口：計時器模式下為計數中走此路線)
+                # (1) ⚡ If 通道 (右側出口：滿足條件走此路線)
                 trig_id = node.on_trigger_target_id
                 if trig_id and trig_id in node_item_map:
                     if not (self._is_wiring and self._wiring_source_item == it and self._wiring_port_type == "trigger"):
@@ -1397,10 +1363,9 @@ class AovGraphArea(QWidget):
                         p_start = it.get_trigger_port_pos()
                         p_end = tgt.get_input_port_pos()
                         edge_dict = {"source_item": it, "target_item": tgt, "port_type": "trigger"}
-                        lbl = "⏱ 計數中" if branch_mode == "timer" else "⚡ if"
-                        self._draw_curve_arrow(painter, p_start, p_end, QColor("#4ade80"), label=lbl, edge_info=edge_dict, port_type="trigger")
+                        self._draw_curve_arrow(painter, p_start, p_end, QColor("#4ade80"), label="⚡ if", edge_info=edge_dict, port_type="trigger")
 
-                # (2) ↪ Else 通道 (頂部出口：到達設定秒數走 Else 通道)
+                # (2) ↪ Else 通道 (頂部出口：不滿足條件走 Else 通道)
                 cont_id = node.on_continue_target_id
                 if cont_id and cont_id in node_item_map:
                     if not (self._is_wiring and self._wiring_source_item == it and self._wiring_port_type == "continue"):
@@ -1408,8 +1373,7 @@ class AovGraphArea(QWidget):
                         p_start = it.get_continue_port_pos()
                         p_end = tgt.get_input_port_pos()
                         edge_dict = {"source_item": it, "target_item": tgt, "port_type": "continue"}
-                        lbl = "else (達標)" if branch_mode == "timer" else "else"
-                        self._draw_curve_arrow(painter, p_start, p_end, QColor("#fb7185"), label=lbl, edge_info=edge_dict, port_type="continue")
+                        self._draw_curve_arrow(painter, p_start, p_end, QColor("#fb7185"), label="else", edge_info=edge_dict, port_type="continue")
 
         # ── 3. 繪製正在拖曳中的連線與磁吸箭頭 ─────────────────
         if self._is_wiring:

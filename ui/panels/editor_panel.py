@@ -97,9 +97,9 @@ class EditorPanel(QWidget):
         btn_add_w.clicked.connect(lambda: self._add_node_by_type(NodeType.WAIT_FIXED))
         toolbar_layout.addWidget(btn_add_w)
 
-        btn_add_b = QPushButton("⏳  ＋計時分支")
-        btn_add_b.setStyleSheet(btn_style_base % ("#fbbf24", "#d97706", "#d97706"))
-        btn_add_b.setToolTip("新增計時變數 X 雙輸出分支 (達X秒觸發/繼續)")
+        btn_add_b = QPushButton("🔀  ＋條件分支")
+        btn_add_b.setStyleSheet(btn_style_base % ("#4ade80", "#15803d", "#15803d"))
+        btn_add_b.setToolTip("新增 Scratch 變數比較雙輸出分支 (If / Else)")
         btn_add_b.clicked.connect(lambda: self._add_node_by_type(NodeType.COUNTER_BRANCH))
         toolbar_layout.addWidget(btn_add_b)
 
@@ -375,8 +375,8 @@ class EditorPanel(QWidget):
                 (NodeType.WAIT_FIXED,  "固定時間延遲 (毫秒)"),
                 (NodeType.WAIT_RANDOM, "隨機等待區間 (防偵測)"),
             ]),
-            ("⏳  雙輸出分支邏輯", [
-                (NodeType.COUNTER_BRANCH, "計時變數 X (雙輸出: 達X秒觸發 / 未觸發繼續)"),
+            ("🔀  雙輸出分支邏輯", [
+                (NodeType.COUNTER_BRANCH, "變數比較 (Scratch If/Else 雙輸出分支)"),
                 (NodeType.REPEAT_BLOCK,   "重複執行迴圈區塊"),
             ]),
         ]
@@ -425,7 +425,7 @@ class EditorPanel(QWidget):
 
         nt_str = str(node_type)
         if "COUNTER_BRANCH" in nt_str:
-            node = MacroNode(type=NodeType.COUNTER_BRANCH, var_name="X", timer_seconds=3.0)
+            node = MacroNode(type=NodeType.COUNTER_BRANCH, var_name="X", branch_mode="compare", compare_op=">", compare_target=50.0)
             node.pos_x = target_x
             node.pos_y = target_y
             from ui.dialogs.counter_branch_dialog import CounterBranchDialog

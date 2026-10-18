@@ -340,9 +340,7 @@ class Player:
         jump_target = getattr(node, "next_node_id", None)
 
         if t in (NodeType.COUNTER_BRANCH, "COUNTER_BRANCH"):
-            import time
             var_name = getattr(node, "var_name", "X") or "X"
-            b_mode = getattr(node, "branch_mode", "timer")
 
             # 記錄此變數的作用結束節點 ID (若有設定)
             scope_end_id = getattr(node, "var_scope_end_node_id", None)
@@ -354,67 +352,26 @@ class Player:
                 init_v = getattr(node, "var_init_val", 0.0)
                 self._variables[var_name] = float(init_v)
 
+            curr_val = self._variables.get(var_name, float(getattr(node, "var_init_val", 0.0)))
+            op = getattr(node, "compare_op", ">")
+            target_val = float(getattr(node, "compare_target", 50.0))
+
             is_condition_met = False
+            if op == ">":
+                is_condition_met = (curr_val > target_val)
+            elif op == "<":
+                is_condition_met = (curr_val < target_val)
+            elif op in ("=", "=="):
+                is_condition_met = abs(curr_val - target_val) < 1e-4
+            elif op == ">=":
+                is_condition_met = (curr_val >= target_val)
+            elif op == "<=":
+                is_condition_met = (curr_val <= target_val)
+            elif op == "!=":
+                is_condition_met = abs(curr_val - target_val) >= 1e-4
 
-            # ── 模式 1: 計時器模式 ──
-            if b_mode == "timer":
-                now = time.time()
-                # 🎯 使用者需求：當到了判斷節點時開始計數
-                if var_name not in self._timers:
-                    self._timers[var_name] = now
-                    # 決定目標數
-                    if getattr(node, "is_random_target", False):
-                        r_min = getattr(node, "random_min", 1.0)
-                        r_max = getattr(node, "random_max", 5.0)
-                        target_sec = random.uniform(min(r_min, r_max), max(r_min, r_max))
-                        self._timers[f"{var_name}_target"] = target_sec
-                        log_info(f"⏳ [計時器模式] 抵達判斷節點，區域變數 [{var_name}] 開始隨機計數 ({r_min}~{r_max}s，本輪目標: {target_sec:.2f}s)")
-                    else:
-                        target_sec = float(getattr(node, "timer_seconds", 3.0))
-                        self._timers[f"{var_name}_target"] = target_sec
-                        log_info(f"⏳ [計時器模式] 抵達判斷節點，區域變數 [{var_name}] 開始計數 (目標: {target_sec}s)")
-
-                target_sec = self._timers.get(f"{var_name}_target", float(getattr(node, "timer_seconds", 3.0)))
-                elapsed = now - self._timers[var_name]
-                self._variables[var_name] = elapsed
-
-                # 🎯 使用者需求：「到達設定秒數 走else通道」
-                if elapsed >= target_sec:
-                    # 到達設定秒數 ➔ 走 Else 通道 (上方通道)
-                    is_condition_met = False
-                    log_info(f"🏁 [計時器模式] 變數 [{var_name}] 已達設定秒數 ({elapsed:.2f}s >= {target_sec:.2f}s)，走【Else 通道】！")
-                    if getattr(node, "auto_reset_on_target", True):
-                        # 到達設定秒數後消除/重置計數器
-                        self._timers.pop(var_name, None)
-                        self._timers.pop(f"{var_name}_target", None)
-                        self._variables[var_name] = float(getattr(node, "var_init_val", 0.0))
-                        log_debug(f"🔄 [計時器模式] 變數 [{var_name}] 已達目標數走 Else，計數器消除重置至初始值")
-                else:
-                    # 未達設定秒數 (計數中) ➔ 走 If 通道 (右側通道)
-                    is_condition_met = True
-                    log_debug(f"⏳ [計時器模式] 變數 [{var_name}] 計數中 ({elapsed:.2f}s / {target_sec:.2f}s，未達設定秒數)，走【If 通道】")
-
-            # ── 模式 2: 區域變數比較大小模式 (Scratch 綠色比較方塊) ──
-            else:
-                curr_val = self._variables.get(var_name, float(getattr(node, "var_init_val", 0.0)))
-                op = getattr(node, "compare_op", ">")
-                target_val = float(getattr(node, "compare_target", 50.0))
-
-                if op == ">":
-                    is_condition_met = (curr_val > target_val)
-                elif op == "<":
-                    is_condition_met = (curr_val < target_val)
-                elif op in ("=", "=="):
-                    is_condition_met = abs(curr_val - target_val) < 1e-4
-                elif op == ">=":
-                    is_condition_met = (curr_val >= target_val)
-                elif op == "<=":
-                    is_condition_met = (curr_val <= target_val)
-                elif op == "!=":
-                    is_condition_met = abs(curr_val - target_val) >= 1e-4
-
-                res_str = "成立 ➔ If 分支 (右側)" if is_condition_met else "不成立 ➔ Else 分支 (上方)"
-                log_info(f"🔀 [變數比較] 判斷 [{var_name}={curr_val} {op} {target_val}] {res_str}")
+            res_str = "成立 ➔ If 分支 (右側)" if is_condition_met else "不成立 ➔ Else 分支 (上方)"
+            log_info(f"🔀 [變數比較] 判斷 [{var_name}={curr_val} {op} {target_val}] {res_str}")
 
             # 滿足條件 (If 路線) vs 不滿足 (Else 路線)
             if is_condition_met:

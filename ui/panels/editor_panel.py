@@ -403,22 +403,25 @@ class EditorPanel(QWidget):
         if not self._macro:
             return
 
-        # 🎯 核心：精確計算與前級節點打直對齊的座標
-        default_x = 50.0
-        default_y = 150.0
-        if self._macro.nodes:
-            last_node = self._macro.nodes[-1]
-            default_x = max(getattr(last_node, "pos_x", 0.0) + 220.0, 50.0 + len(self._macro.nodes) * 220.0)
-            default_y = getattr(last_node, "pos_y", 150.0)
-            if default_y <= 0:
-                default_y = 150.0
+        # 🎯 核心：精確計算與前級節點打直對齊的座標，確保位置永遠在所有節點的最尾端
+        baseline_y = 150.0
+        max_tail_x = 50.0
 
-        target_x = x if x > 0 else default_x
-        # 若為預設新增 (y<=0) 或右鍵點擊位置在基準線上下 80px 範圍內，自動磁吸打平至同一水平高度
-        if y <= 0 or abs(y - default_y) <= 80:
-            target_y = default_y
+        if self._macro.nodes:
+            baseline_y = getattr(self._macro.nodes[0], "pos_y", 150.0)
+            if baseline_y <= 0:
+                baseline_y = 150.0
+
+            # 找出所有現有節點中 X 座標最大者，確保新節點永遠接在最尾端
+            for n in self._macro.nodes:
+                nx = getattr(n, "pos_x", 50.0)
+                if nx > max_tail_x:
+                    max_tail_x = nx
+            target_x = max_tail_x + 220.0
         else:
-            target_y = y
+            target_x = 50.0
+
+        target_y = baseline_y
 
         nt_str = str(node_type)
         if "COUNTER_BRANCH" in nt_str:

@@ -72,6 +72,7 @@ class HorizontalAovNodeItem(QWidget):
 
         # 磁吸高亮狀態
         self._is_input_snapped = False
+        self._zoom = 1.0
 
         self.setFixedWidth(144)
         self.setFixedHeight(135)
@@ -188,48 +189,30 @@ class HorizontalAovNodeItem(QWidget):
         dy = pos.y() - pt.y()
         return (dx * dx + dy * dy) <= (20 * 20)
 
-    # ── 斷開所有連向本節點的輸入連線 ───────────────────────────
-    def _disconnect_incoming_connections(self):
-        """斷開所有連向本節點的連線"""
+    def _find_incoming_connection(self) -> Optional[Tuple[HorizontalAovNodeItem, str]]:
+        """尋找目前連入本節點的 (來源節點, 連線端口類型)"""
         graph_area = self.parent()
         if not graph_area:
-            return
-        canvas = getattr(graph_area, "_canvas", None)
-        items: List[HorizontalAovNodeItem] = getattr(canvas, "_items", []) if canvas else []
-        disconnected_any = False
-
+            return None
+        items: List[HorizontalAovNodeItem] = graph_area._get_canvas_items() if hasattr(graph_area, "_get_canvas_items") else []
         for it in items:
+            if it == self:
+                continue
             n = it.node
-            # 普通連線指向本節點
             if n.next_node_id == self._node.id:
-                n.next_node_id = "__END__"
-                it.connection_changed.emit(n)
-                disconnected_any = True
-            # 分支觸發指向本節點
+                return (it, "normal")
             if n.on_trigger_target_id == self._node.id:
-                n.on_trigger_target_id = None
-                it.connection_changed.emit(n)
-                disconnected_any = True
-            # 分支繼續指向本節點
+                return (it, "trigger")
             if n.on_continue_target_id == self._node.id:
-                n.on_continue_target_id = None
-                it.connection_changed.emit(n)
-                disconnected_any = True
-
-        # 若是預設循序連線的前一個節點且 next_node_id 為 None
+                return (it, "continue")
         for idx, it in enumerate(items):
             if idx + 1 < len(items) and items[idx + 1] == self:
                 if it.node.next_node_id is None:
-                    it.node.next_node_id = "__END__"
-                    it.connection_changed.emit(it.node)
-                    disconnected_any = True
+                    return (it, "normal")
+        return None
 
-        if disconnected_any:
-            graph_area.update()
-
-    # ── 滑鼠互動：拖曳節點 vs 點擊端口拉線 vs 拖曳輸入孔斷開 ─────
+    # ── 滑鼠互動：拖曳節點 vs 點擊輸出拉線 vs 拖曳輸入拔起重連 ───────
     def mousePressEvent(self, event):
-        # 1. 中鍵按下 ➔ 轉發給畫布啟動平移 (Pan)
         if event.button() == Qt.MouseButton.MiddleButton:
             graph_area = self.parent()
             if graph_area and hasattr(graph_area, "mousePressEvent"):
@@ -238,14 +221,20 @@ class HorizontalAovNodeItem(QWidget):
             return
 
         if event.button() == Qt.MouseButton.LeftButton:
-            # 2. 點擊輸入小圓點 ➔ 準備拖曳斷開連線
+            # 🎯 1. 點擊輸入小圓點 ➔ 拔起箭頭頭部拖曳改變目標 (不直接刪除！)
             if self._hit_input_port(event.pos()):
-                self._is_disconnecting_input = True
-                self._disconnect_start_pos = event.pos()
-                event.accept()
-                return
+                incoming = self._find_incoming_connection()
+                if incoming:
+                    src_it, port_type = incoming
+                    graph_area = self.parent()
+                    if graph_area and hasattr(graph_area, "start_rewiring_input"):
+                        self._is_wiring = True
+                        self._wiring_port = port_type
+                        graph_area.start_rewiring_input(src_it, port_type, self)
+                        event.accept()
+                        return
 
-            # 3. 點擊輸出小圓點 ➔ 啟動直接拉箭頭連線！
+            # 🎯 2. 點擊輸出小圓點 ➔ 拔起/拉出箭頭尾端拖曳連線！
             port = self._hit_output_port(event.pos())
             if port:
                 self._is_wiring = True
@@ -255,17 +244,16 @@ class HorizontalAovNodeItem(QWidget):
                     graph_area.start_wiring(self, port)
                 event.accept()
                 return
-            else:
-                # 4. 點擊節點本體 ➔ 拖曳移動節點
-                self._is_dragging = True
-                self._drag_start_pos = event.globalPosition().toPoint()
-                self._drag_node_pos = self.pos()
-                self.selected.emit(self)
-                self.raise_()
+
+            # 🎯 3. 點擊節點本體 ➔ 拖曳移動節點
+            self._is_dragging = True
+            self._drag_start_pos = event.globalPosition().toPoint()
+            self._drag_node_pos = self.pos()
+            self.selected.emit(self)
+            self.raise_()
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        # 中鍵拖曳 ➔ 平移
         if event.buttons() & Qt.MouseButton.MiddleButton:
             graph_area = self.parent()
             if graph_area and hasattr(graph_area, "mouseMoveEvent"):
@@ -273,19 +261,8 @@ class HorizontalAovNodeItem(QWidget):
             event.accept()
             return
 
-        if getattr(self, "_is_disconnecting_input", False):
-            # 拖曳輸入孔超過 12px ➔ 斷開連線！
-            diff = event.pos() - getattr(self, "_disconnect_start_pos", event.pos())
-            if diff.manhattanLength() > 12:
-                self._is_disconnecting_input = False
-                self._disconnect_incoming_connections()
-                self.setCursor(Qt.CursorShape.PointingHandCursor)
-                self.setToolTip("已斷開連入此節點的箭頭連線")
-            event.accept()
-            return
-
         if self._is_wiring:
-            # 正在拉箭頭連線：將滑鼠位置轉移給父畫布進行磁吸計算
+            # 正在拖曳箭頭端點 (改變頭部或尾部位置)
             graph_area = self.parent()
             if graph_area and hasattr(graph_area, "update_wiring"):
                 local_pt = graph_area.mapFromGlobal(event.globalPosition().toPoint())
@@ -300,12 +277,12 @@ class HorizontalAovNodeItem(QWidget):
             ny = max(GRID_SIZE, new_pos.y())
             self.move(nx, ny)
             if self.parent():
-                self.parent().update()  # 即時重繪所有連接箭頭
+                self.parent().update()
         else:
             # 懸停檢測
             if self._hit_input_port(event.pos()):
                 self.setCursor(Qt.CursorShape.PointingHandCursor)
-                self.setToolTip("按住向外拖曳：斷開連入此節點的箭頭連線")
+                self.setToolTip("按住拖曳端點：拔起箭頭並改變其連線目標")
             else:
                 port = self._hit_output_port(event.pos())
                 if port != self._hovered_port:
@@ -313,7 +290,7 @@ class HorizontalAovNodeItem(QWidget):
                     self.update()
                 if port:
                     self.setCursor(Qt.CursorShape.CrossCursor)
-                    self.setToolTip("按住拖曳：拉出箭頭連線至目標節點")
+                    self.setToolTip("按住拖曳端點：拉出箭頭並設定目標節點")
                 else:
                     self.setCursor(Qt.CursorShape.PointingHandCursor)
                     self.setToolTip("")
@@ -327,8 +304,6 @@ class HorizontalAovNodeItem(QWidget):
             event.accept()
             return
 
-        self._is_disconnecting_input = False
-
         if self._is_wiring:
             self._is_wiring = False
             self._wiring_port = ""
@@ -339,29 +314,31 @@ class HorizontalAovNodeItem(QWidget):
             return
         elif self._is_dragging:
             self._is_dragging = False
-            # 自動吸附網格 (Snap to Grid)
-            snap_x = round(self.x() / GRID_SIZE) * GRID_SIZE
-            snap_y = round(self.y() / GRID_SIZE) * GRID_SIZE
-            snap_x = max(50, snap_x)
-            snap_y = max(50, snap_y)
+            zoom = getattr(self, "_zoom", 1.0)
+            if zoom <= 0:
+                zoom = 1.0
 
-            # 🎯 智慧水平磁吸：若與其他任何節點的高度相差在 35px 內，自動強磁吸對齊至同一水平 Y 軸！
+            # 🎯 嚴格使用世界座標換算並吸附網格 (防止滾輪縮放時座標亂跳)
+            world_x = round((self.x() / zoom) / GRID_SIZE) * GRID_SIZE
+            world_y = round((self.y() / zoom) / GRID_SIZE) * GRID_SIZE
+            world_x = max(50, world_x)
+            world_y = max(50, world_y)
+
+            # 🎯 智慧水平磁吸 (基於世界座標)
             aligned_y = None
             min_dy = 9999
             for it in self._all_nodes:
                 if it.id != self._node.id and getattr(it, "pos_y", 0) > 0:
-                    dy = abs(snap_y - it.pos_y)
+                    dy = abs(world_y - it.pos_y)
                     if dy < min_dy and dy <= 35:
                         min_dy = dy
                         aligned_y = it.pos_y
             if aligned_y is not None:
-                snap_y = int(aligned_y)
+                world_y = int(aligned_y)
 
-            self.move(snap_x, snap_y)
-
-            # 存入節點物件
-            self._node.pos_x = float(snap_x)
-            self._node.pos_y = float(snap_y)
+            self._node.pos_x = float(world_x)
+            self._node.pos_y = float(world_y)
+            self.move(int(world_x * zoom), int(world_y * zoom))
             self.node_moved.emit(self._node)
 
             if self.parent():
@@ -654,36 +631,33 @@ class HorizontalAovNodeItem(QWidget):
             circle_color = QColor("#94a3b8")
             border_color = QColor("#64748b")
 
-        # 3. 頂部角色徽章
-        if is_branch:
-            role_text = "⏱ TIMER" if branch_mode == "timer" else "🔢 COMPARE"
-            badge_bg = QColor("#78350f" if branch_mode == "timer" else "#14532d")
-            badge_fg = QColor("#fde68a" if branch_mode == "timer" else "#86efac")
-        elif self._index == 0:
-            role_text = "➔ ROOT"
-            badge_bg = QColor("#0369a1")
-            badge_fg = QColor("#38bdf8")
-        elif self._index == self._total - 1:
-            role_text = "➔ LEAF"
-            badge_bg = QColor("#4c1d95")
-            badge_fg = QColor("#c084fc")
-        else:
-            role_text = "➔ NODE"
-            badge_bg = QColor("#1e293b")
-            badge_fg = QColor("#94a3b8")
+        # 3. 頂部角色徽章 (非分支節點繪製，分支節點保持頂部乾淨供 Else 出口直角走線)
+        if not is_branch:
+            if self._index == 0:
+                role_text = "➔ ROOT"
+                badge_bg = QColor("#0369a1")
+                badge_fg = QColor("#38bdf8")
+            elif self._index == self._total - 1:
+                role_text = "➔ LEAF"
+                badge_bg = QColor("#4c1d95")
+                badge_fg = QColor("#c084fc")
+            else:
+                role_text = "➔ NODE"
+                badge_bg = QColor("#1e293b")
+                badge_fg = QColor("#94a3b8")
 
-        badge_w = 76
-        badge_h = 18
-        badge_x = cx - badge_w // 2
-        badge_y = 6
-        painter.setBrush(QBrush(badge_bg))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawRoundedRect(QRect(badge_x, badge_y, badge_w, badge_h), 4, 4)
+            badge_w = 76
+            badge_h = 18
+            badge_x = cx - badge_w // 2
+            badge_y = 6
+            painter.setBrush(QBrush(badge_bg))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRoundedRect(QRect(badge_x, badge_y, badge_w, badge_h), 4, 4)
 
-        painter.setPen(badge_fg)
-        font_badge = QFont("Consolas", 8, QFont.Weight.Bold)
-        painter.setFont(font_badge)
-        painter.drawText(QRect(badge_x, badge_y, badge_w, badge_h), Qt.AlignmentFlag.AlignCenter, role_text)
+            painter.setPen(badge_fg)
+            font_badge = QFont("Consolas", 8, QFont.Weight.Bold)
+            painter.setFont(font_badge)
+            painter.drawText(QRect(badge_x, badge_y, badge_w, badge_h), Qt.AlignmentFlag.AlignCenter, role_text)
 
         # 4. 執行中光暈 / 選取光環
         if is_branch:
@@ -1000,6 +974,7 @@ class AovGraphArea(QWidget):
         self._is_wiring = True
         self._wiring_source_item = source_item
         self._wiring_port_type = port_type
+        self._original_target_item = None
 
         if port_type == "trigger":
             self._wiring_start_pt = source_item.get_trigger_port_pos()
@@ -1013,6 +988,25 @@ class AovGraphArea(QWidget):
         self._selected_edge = None
         self.update()
 
+    def start_rewiring_input(self, source_item: HorizontalAovNodeItem, port_type: str, current_target_item: HorizontalAovNodeItem):
+        """由輸入端口被拖曳時拔起連線：起點保持在來源節點，終點跟隨滑鼠移動"""
+        self._is_wiring = True
+        self._wiring_source_item = source_item
+        self._wiring_port_type = port_type
+        self._original_target_item = current_target_item
+
+        if port_type == "trigger":
+            self._wiring_start_pt = source_item.get_trigger_port_pos()
+        elif port_type == "continue":
+            self._wiring_start_pt = source_item.get_continue_port_pos()
+        else:
+            self._wiring_start_pt = source_item.get_output_port_pos()
+
+        self._wiring_current_pt = current_target_item.get_input_port_pos()
+        self._snapped_target_item = current_target_item
+        self._selected_edge = None
+        self.update()
+
     def update_wiring(self, mouse_canvas_pt: QPoint):
         """滑鼠移動時更新拉線軌跡，並對所有後級節點輸入端進行磁吸判定"""
         if not self._is_wiring or not self._wiring_source_item:
@@ -1021,7 +1015,7 @@ class AovGraphArea(QWidget):
         self._wiring_current_pt = mouse_canvas_pt
         items = self._get_canvas_items()
 
-        # 🧲 磁吸判定：尋找距離小於 50px 的後級輸入孔
+        # 🧲 磁吸判定：尋找距離小於 50px 的輸入孔
         SNAP_RADIUS = 50
         closest_dist = SNAP_RADIUS + 1
         best_target = None
@@ -1049,7 +1043,7 @@ class AovGraphArea(QWidget):
         self.update()
 
     def finish_wiring(self):
-        """放開滑鼠：若已吸附目標節點，正式建立連線！"""
+        """放開滑鼠：若已吸附目標節點，正式建立連線！若拖曳離開原節點且未吸附，才斷開連線！"""
         if not self._is_wiring:
             return
 
@@ -1057,22 +1051,38 @@ class AovGraphArea(QWidget):
         for it in items:
             it.set_input_snapped(False)
 
-        if self._wiring_source_item and self._snapped_target_item:
+        orig_target = getattr(self, "_original_target_item", None)
+
+        if self._wiring_source_item:
             source_node = self._wiring_source_item.node
-            target_node = self._snapped_target_item.node
-
-            if self._wiring_port_type == "trigger":
-                source_node.on_trigger_target_id = target_node.id
-            elif self._wiring_port_type == "continue":
-                source_node.on_continue_target_id = target_node.id
-            else:
-                source_node.next_node_id = target_node.id
-
-            self._wiring_source_item.connection_changed.emit(source_node)
+            if self._snapped_target_item:
+                target_node = self._snapped_target_item.node
+                if self._wiring_port_type == "trigger":
+                    source_node.on_trigger_target_id = target_node.id
+                elif self._wiring_port_type == "continue":
+                    source_node.on_continue_target_id = target_node.id
+                else:
+                    source_node.next_node_id = target_node.id
+                self._wiring_source_item.connection_changed.emit(source_node)
+            elif orig_target:
+                # 是從輸入孔拔起來但放開在空白處：若拖離原節點 > 45px 才斷開
+                dist = math.hypot(
+                    self._wiring_current_pt.x() - orig_target.get_input_port_pos().x(),
+                    self._wiring_current_pt.y() - orig_target.get_input_port_pos().y()
+                )
+                if dist > 45:
+                    if self._wiring_port_type == "trigger":
+                        source_node.on_trigger_target_id = None
+                    elif self._wiring_port_type == "continue":
+                        source_node.on_continue_target_id = None
+                    else:
+                        source_node.next_node_id = "__END__"
+                    self._wiring_source_item.connection_changed.emit(source_node)
 
         self._is_wiring = False
         self._wiring_source_item = None
         self._snapped_target_item = None
+        self._original_target_item = None
         self.update()
 
     def delete_selected_edge(self):
@@ -1243,11 +1253,34 @@ class AovGraphArea(QWidget):
 
         menu.addSeparator()
 
+        # 一鍵全節點水平打直
+        act_align_all = menu.addAction("🪄  一鍵全節點水平打直對齊 (整隊打直)")
+        act_align_all.triggered.connect(self._align_all_nodes_horizontal)
+
         # 重置縮放
         act_zoom_reset = menu.addAction("🔍  重置畫布縮放 (100%)")
         act_zoom_reset.triggered.connect(lambda: self._canvas.apply_zoom(1.0, QPoint(0, 0)) if self._canvas else None)
 
         menu.exec(event.globalPos())
+
+    def _align_all_nodes_horizontal(self):
+        """將畫布上所有節點統一水平打直對齊至同一基準線 (150.0 或第一節點的 Y)"""
+        items = self._get_canvas_items()
+        if not items:
+            return
+        base_y = 150.0
+        for it in items:
+            if getattr(it.node, "pos_y", 0) > 0:
+                base_y = it.node.pos_y
+                break
+        zoom = getattr(self._canvas, "_zoom_factor", 1.0) if self._canvas else 1.0
+        for it in items:
+            it.node.pos_y = base_y
+            it.move(int(it.node.pos_x * zoom), int(base_y * zoom))
+            it.node_moved.emit(it.node)
+        self.update()
+        if self._canvas:
+            self._canvas.macro_modified.emit()
 
     def _request_add_node(self, node_type: str, x: float = 0.0, y: float = 0.0):
         if self._canvas:
@@ -1342,35 +1375,39 @@ class AovGraphArea(QWidget):
                     target_item = items[idx + 1]
 
                 if target_item:
+                    # 若正在拔線重接此連線，暫時隱藏固定連線
+                    if self._is_wiring and self._wiring_source_item == it and self._wiring_port_type == "normal":
+                        continue
                     p_start = it.get_output_port_pos()
                     p_end = target_item.get_input_port_pos()
                     color = QColor("#38bdf8") if not it._is_executing else QColor("#facc15")
                     edge_dict = {"source_item": it, "target_item": target_item, "port_type": "normal"}
-                    self._draw_curve_arrow(painter, p_start, p_end, color, edge_info=edge_dict)
+                    self._draw_curve_arrow(painter, p_start, p_end, color, edge_info=edge_dict, port_type="normal")
 
             else:
                 # 分支判斷節點（BRANCH）雙連線：
                 # (1) ⚡ If / 觸發分支 (右側頂點筆直/平滑輸出)
                 trig_id = node.on_trigger_target_id
                 if trig_id and trig_id in node_item_map:
-                    tgt = node_item_map[trig_id]
-                    p_start = it.get_trigger_port_pos()
-                    p_end = tgt.get_input_port_pos()
-                    edge_dict = {"source_item": it, "target_item": tgt, "port_type": "trigger"}
-                    self._draw_curve_arrow(painter, p_start, p_end, QColor("#4ade80"), label="⚡ if", edge_info=edge_dict)
+                    if not (self._is_wiring and self._wiring_source_item == it and self._wiring_port_type == "trigger"):
+                        tgt = node_item_map[trig_id]
+                        p_start = it.get_trigger_port_pos()
+                        p_end = tgt.get_input_port_pos()
+                        edge_dict = {"source_item": it, "target_item": tgt, "port_type": "trigger"}
+                        self._draw_curve_arrow(painter, p_start, p_end, QColor("#4ade80"), label="⚡ if", edge_info=edge_dict, port_type="trigger")
 
-                # (2) ↪ Else / 繼續分支 (如圖 1 頂部 else 折角連線)
+                # (2) ↪ Else / 繼續分支 (如圖 1 頂部 else 直角折線)
                 cont_id = node.on_continue_target_id
                 if cont_id and cont_id in node_item_map:
-                    tgt = node_item_map[cont_id]
-                    p_start = it.get_continue_port_pos()
-                    p_end = tgt.get_input_port_pos()
-                    edge_dict = {"source_item": it, "target_item": tgt, "port_type": "continue"}
-                    self._draw_curve_arrow(painter, p_start, p_end, QColor("#fb7185"), label="else", edge_info=edge_dict, port_type="continue")
+                    if not (self._is_wiring and self._wiring_source_item == it and self._wiring_port_type == "continue"):
+                        tgt = node_item_map[cont_id]
+                        p_start = it.get_continue_port_pos()
+                        p_end = tgt.get_input_port_pos()
+                        edge_dict = {"source_item": it, "target_item": tgt, "port_type": "continue"}
+                        self._draw_curve_arrow(painter, p_start, p_end, QColor("#fb7185"), label="else", edge_info=edge_dict, port_type="continue")
 
         # ── 3. 繪製正在拖曳中的連線與磁吸箭頭 ─────────────────
         if self._is_wiring:
-            # 判斷連線顏色：若磁吸上目標則變為亮綠色，否則為黃色/青色
             if self._snapped_target_item:
                 wire_color = QColor("#4ade80")
             elif self._wiring_port_type == "trigger":
@@ -1394,37 +1431,45 @@ class AovGraphArea(QWidget):
         edge_info: Optional[Dict] = None,
         port_type: str = "normal"
     ):
-        dx = p2.x() - p1.x()
-        dy = p2.y() - p1.y()
-
+        """繪製 100% 正交直角箭頭 (Orthogonal Right-Angle Steps Only)"""
         path = QPainterPath()
         path.moveTo(QPointF(p1))
 
-        # 🎯 如圖 1：Else 分支從上頂點出發，向上延伸 25px，然後水平折角向右！
+        # 🎯 使用者核心要求：「箭頭只能是直角」 (100% 正交水平與垂直折線)
         if port_type == "continue":
-            up_y = p1.y() - 25
+            # 🎯 Else 分支：從上頂點出發，向上延伸 28px ➔ 折角向右 ➔ 垂直折角對齊目標高度 ➔ 水平進入目標
+            up_y = p1.y() - 28
             path.lineTo(QPointF(p1.x(), up_y))
-            if p2.x() > p1.x() + 20:
-                # 折向右邊
-                ctrl_x = max(p1.x() + 30, p2.x() - 35)
-                c1 = QPoint(ctrl_x, up_y)
-                c2 = QPoint(ctrl_x, p2.y())
-                path.cubicTo(QPointF(c1), QPointF(c2), QPointF(p2))
+            if p2.x() >= p1.x() + 20:
+                mid_x = p2.x() - 15
+                path.lineTo(QPointF(mid_x, up_y))
+                path.lineTo(QPointF(mid_x, p2.y()))
+                path.lineTo(QPointF(p2.x(), p2.y()))
             else:
-                ctrl_offset = max(40, abs(dx) * 0.45)
-                c1 = QPoint(p1.x(), int(up_y - ctrl_offset))
-                c2 = QPoint(int(p2.x() - ctrl_offset), p2.y())
-                path.cubicTo(QPointF(c1), QPointF(c2), QPointF(p2))
-        elif abs(dy) <= 4:
-            # 🎯 水平打直直線連接
-            p2_straight = QPoint(p2.x(), p1.y())
-            path.lineTo(QPointF(p2_straight))
-            c2 = QPoint(p1.x(), p1.y())
+                # 逆向繞行 (向上 bypass)
+                path.lineTo(QPointF(p2.x() - 20, up_y))
+                path.lineTo(QPointF(p2.x() - 20, p2.y()))
+                path.lineTo(QPointF(p2.x(), p2.y()))
+
+        elif abs(p1.y() - p2.y()) <= 3:
+            # 🎯 水平打直直線
+            path.lineTo(QPointF(p2.x(), p1.y()))
+
+        elif p2.x() >= p1.x() + 25:
+            # 🎯 標準正向連線：水平出線到中點 ➔ 垂直轉折 90 度 ➔ 水平進目標 90 度
+            mid_x = (p1.x() + p2.x()) // 2
+            path.lineTo(QPointF(mid_x, p1.y()))
+            path.lineTo(QPointF(mid_x, p2.y()))
+            path.lineTo(QPointF(p2.x(), p2.y()))
+
         else:
-            ctrl_offset = max(40, abs(dx) * 0.45)
-            c1 = QPoint(int(p1.x() + ctrl_offset), p1.y())
-            c2 = QPoint(int(p2.x() - ctrl_offset), p2.y())
-            path.cubicTo(QPointF(c1), QPointF(c2), QPointF(p2))
+            # 🎯 逆向折角走線：水平向右出線 ➔ 垂直避開 ➔ 向左 ➔ 垂直 ➔ 水平進目標
+            bypass_y = max(p1.y(), p2.y()) + 55
+            path.lineTo(QPointF(p1.x() + 20, p1.y()))
+            path.lineTo(QPointF(p1.x() + 20, bypass_y))
+            path.lineTo(QPointF(p2.x() - 20, bypass_y))
+            path.lineTo(QPointF(p2.x() - 20, p2.y()))
+            path.lineTo(QPointF(p2.x(), p2.y()))
 
         if edge_info:
             edge_data = dict(edge_info)
@@ -1439,34 +1484,29 @@ class AovGraphArea(QWidget):
                 self._selected_edge.get("port_type") == edge_info.get("port_type")):
                 is_selected = True
 
-        # 繪製曲線路徑
+        # 繪製直角折線路徑 (設定 SquareCap 與 MiterJoin，確保 90 度折角極致俐落銳利)
         if is_selected:
-            # 被選中時：外層白色虛線發光外框
-            glow_pen = QPen(QColor(255, 255, 255, 180), 5, Qt.PenStyle.DashLine)
+            glow_pen = QPen(QColor(255, 255, 255, 180), 5, Qt.PenStyle.DashLine, Qt.PenCapStyle.SquareCap, Qt.PenJoinStyle.MiterJoin)
             painter.strokePath(path, glow_pen)
-            pen = QPen(QColor("#ffffff"), 2.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+            pen = QPen(QColor("#ffffff"), 2.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.SquareCap, Qt.PenJoinStyle.MiterJoin)
         elif is_wiring:
-            glow_pen = QPen(QColor(color.red(), color.green(), color.blue(), 70), 5, Qt.PenStyle.SolidLine)
+            glow_pen = QPen(QColor(color.red(), color.green(), color.blue(), 70), 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.SquareCap, Qt.PenJoinStyle.MiterJoin)
             painter.strokePath(path, glow_pen)
-            pen = QPen(color, 2.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+            pen = QPen(color, 2.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.SquareCap, Qt.PenJoinStyle.MiterJoin)
         else:
-            pen = QPen(color, 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+            pen = QPen(color, 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.SquareCap, Qt.PenJoinStyle.MiterJoin)
 
         painter.strokePath(path, pen)
 
-        # 終點導向三角箭頭
-        arrow_size = 10 if (is_selected or is_wiring) else 8
+        # 🎯 終點導向三角箭頭：由於最後一段必定為水平直線進入 p2，箭頭永遠為水平向右直角三角箭頭！
+        arrow_len = 8 if (is_selected or is_wiring) else 7
+        arrow_half_h = 5
         arrow_color = QColor("#ffffff") if is_selected else color
-        angle = math.atan2(p2.y() - c2.y(), p2.x() - c2.x())
-        p_arrow1 = QPoint(
-            int(p2.x() - arrow_size * math.cos(angle - math.pi / 6)),
-            int(p2.y() - arrow_size * math.sin(angle - math.pi / 6))
-        )
-        p_arrow2 = QPoint(
-            int(p2.x() - arrow_size * math.cos(angle + math.pi / 6)),
-            int(p2.y() - arrow_size * math.sin(angle + math.pi / 6))
-        )
-        arrow = QPolygon([p2, p_arrow1, p_arrow2])
+        arrow = QPolygon([
+            p2,
+            QPoint(p2.x() - arrow_len, p2.y() - arrow_half_h),
+            QPoint(p2.x() - arrow_len, p2.y() + arrow_half_h)
+        ])
         painter.setBrush(QBrush(arrow_color))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawPolygon(arrow)
@@ -1477,16 +1517,21 @@ class AovGraphArea(QWidget):
             disp_label = f"{label} [DEL]" if label else "[DEL刪除]"
 
         if disp_label:
-            mid_x = (p1.x() + p2.x()) // 2
-            mid_y = (p1.y() + p2.y()) // 2 - 10
-            font = QFont("Consolas", 8, QFont.Weight.Bold)
-            painter.setFont(font)
-            bw = 60 if is_selected else 48
-            rect = QRect(mid_x - bw // 2, mid_y - 8, bw, 16)
+            if port_type == "continue":
+                # Else 標籤放在垂直折角頂部的水平線上方
+                rect = QRect(p1.x() + 6, p1.y() - 38, 40, 16)
+            else:
+                mid_x = (p1.x() + p2.x()) // 2
+                mid_y = p1.y() - 10
+                bw = 60 if is_selected else 48
+                rect = QRect(mid_x - bw // 2, mid_y - 8, bw, 16)
+
             painter.setBrush(QBrush(QColor("#08080f")))
             painter.setPen(QPen(arrow_color, 1))
             painter.drawRoundedRect(rect, 3, 3)
             painter.setPen(arrow_color)
+            font = QFont("Consolas", 8, QFont.Weight.Bold)
+            painter.setFont(font)
             painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, disp_label)
 
     def _draw_arrow(self, painter: QPainter, p1: QPoint, p2: QPoint, color: QColor, label: str = ""):
@@ -1688,6 +1733,8 @@ class HorizontalAovCanvas(QScrollArea):
 
     def _create_item(self, node: MacroNode, index: int, total: int) -> HorizontalAovNodeItem:
         item = HorizontalAovNodeItem(node, index, total, self._nodes, self._graph_area)
+        zoom = getattr(self, "_zoom_factor", 1.0)
+        item._zoom = zoom
         item.selected.connect(self._on_item_selected)
         item.delete_requested.connect(self.delete_requested.emit)
         item.copy_requested.connect(self.copy_requested.emit)

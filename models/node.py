@@ -123,19 +123,33 @@ class MacroNode:
     # ── 錄製時間戳 ──
     timestamp_ms: int = 0                   # 相對錄製開始的時間
 
-    # ── 雙輸出計時/計數分支器欄位 ──
+    # ── 雙輸出計時/比較分支器欄位 (支援 Scratch 形式) ──
+    branch_mode: str = "timer"              # 分支模式: "timer" (計時器模式), "compare" (區域變數比較大小)
     var_name: str = "X"                     # 區域變數名稱
-    timer_seconds: float = 3.0              # 計時 X 秒
+    var_init_val: float = 0.0               # 初始值 (預設為 0)
+    var_scope_end_node_id: Optional[str] = None  # 區域範圍結束位置節點 ID (標示結束位置並消除)
+    
+    # ── 計時器模式參數 ──
+    timer_seconds: float = 3.0              # 固定目標時長 (秒)
+    is_random_target: bool = False          # 是否自定義隨機目標數
+    random_min: float = 1.0                 # 隨機目標數下限 (秒)
+    random_max: float = 5.0                 # 隨機目標數上限 (秒)
+    auto_reset_on_target: bool = True       # 數至目標數後消除/重置計數器
     trigger_type: str = "timeout"           # 觸發條件: "timeout" (時間到), "key_release" (按鍵放開)
-    on_trigger_nodes: List["MacroNode"] = field(default_factory=list)   # 輸出1: 觸發時執行的操作 (按鍵放開/時間到時插入)
-    on_continue_nodes: List["MacroNode"] = field(default_factory=list)  # 輸出2: 還沒有觸發時繼續執行的操作
+
+    # ── 區域變數比較模式參數 (Scratch 六角形比較積木) ──
+    compare_op: str = ">"                   # 比較運算子: ">", "<", "=", ">=", "<=", "!="
+    compare_target: float = 50.0            # 比較目標數值 (預設 50)
+
+    on_trigger_nodes: List["MacroNode"] = field(default_factory=list)   # 輸出1: 滿足條件/觸發時執行的操作 (If 分支)
+    on_continue_nodes: List["MacroNode"] = field(default_factory=list)  # 輸出2: 不滿足條件/未觸發時操作 (Else 分支)
 
     # ── 自由網格畫布座標與自訂箭頭連線目標 ──
     pos_x: float = 0.0                      # 畫布 X 座標
     pos_y: float = 0.0                      # 畫布 Y 座標
     next_node_id: Optional[str] = None      # 普通節點箭頭指向的目標節點 ID (None=預設下一個)
-    on_trigger_target_id: Optional[str] = None  # 分支節點【觸發】箭頭目標節點 ID
-    on_continue_target_id: Optional[str] = None # 分支節點【繼續】箭頭目標節點 ID
+    on_trigger_target_id: Optional[str] = None  # 分支節點【If / 觸發】箭頭目標節點 ID
+    on_continue_target_id: Optional[str] = None # 分支節點【Else / 繼續】箭頭目標節點 ID
 
     # ── 顯示用備註 ──
     comment: str = ""
@@ -171,8 +185,16 @@ class MacroNode:
             key_str = f"[{self.wait_key}]" if self.wait_key else "任意鍵"
             return f"等待使用者按 {key_str}"
         elif t == NodeType.COUNTER_BRANCH:
-            trig_desc = f"{self.timer_seconds}s" if self.trigger_type == "timeout" else "放開觸發"
-            return f"計時變數[{self.var_name}:{trig_desc}] 雙輸出分支"
+            b_mode = getattr(self, "branch_mode", "timer")
+            if b_mode == "compare":
+                op = getattr(self, "compare_op", ">")
+                tgt = getattr(self, "compare_target", 50.0)
+                tgt_str = f"{int(tgt)}" if tgt.is_integer() else f"{tgt:.1f}"
+                return f"判斷 [{self.var_name} {op} {tgt_str}]"
+            else:
+                if getattr(self, "is_random_target", False):
+                    return f"計時變數 [{self.var_name}: {self.random_min}~{self.random_max}s]"
+                return f"計時變數 [{self.var_name}: {self.timer_seconds}s]"
         return t
 
     def to_dict(self) -> Dict[str, Any]:
@@ -201,9 +223,18 @@ class MacroNode:
             "wait_key": self.wait_key,
             "timestamp_ms": self.timestamp_ms,
             "comment": self.comment,
-            # 雙輸出分支擴充
+            # 雙輸出分支擴充 (Scratch 形式)
+            "branch_mode": getattr(self, "branch_mode", "timer"),
             "var_name": self.var_name,
+            "var_init_val": getattr(self, "var_init_val", 0.0),
+            "var_scope_end_node_id": getattr(self, "var_scope_end_node_id", None),
             "timer_seconds": self.timer_seconds,
+            "is_random_target": getattr(self, "is_random_target", False),
+            "random_min": getattr(self, "random_min", 1.0),
+            "random_max": getattr(self, "random_max", 5.0),
+            "auto_reset_on_target": getattr(self, "auto_reset_on_target", True),
+            "compare_op": getattr(self, "compare_op", ">"),
+            "compare_target": getattr(self, "compare_target", 50.0),
             "trigger_type": self.trigger_type,
             "on_trigger_nodes": [n.to_dict() for n in self.on_trigger_nodes],
             "on_continue_nodes": [n.to_dict() for n in self.on_continue_nodes],
@@ -242,8 +273,17 @@ class MacroNode:
             timestamp_ms=d.get("timestamp_ms", 0),
             comment=d.get("comment", ""),
             # 雙輸出分支擴充
+            branch_mode=d.get("branch_mode", "timer"),
             var_name=d.get("var_name", "X"),
-            timer_seconds=d.get("timer_seconds", 3.0),
+            var_init_val=float(d.get("var_init_val", 0.0)),
+            var_scope_end_node_id=d.get("var_scope_end_node_id", None),
+            timer_seconds=float(d.get("timer_seconds", 3.0)),
+            is_random_target=bool(d.get("is_random_target", False)),
+            random_min=float(d.get("random_min", 1.0)),
+            random_max=float(d.get("random_max", 5.0)),
+            auto_reset_on_target=bool(d.get("auto_reset_on_target", True)),
+            compare_op=d.get("compare_op", ">"),
+            compare_target=float(d.get("compare_target", 50.0)),
             trigger_type=d.get("trigger_type", "timeout"),
             # 網格座標與自訂連線
             pos_x=float(d.get("pos_x", 0.0)),

@@ -44,8 +44,10 @@ class Player:
         self._on_loop_count: Optional[Callable[[int], None]] = None
         self._on_error: Optional[Callable[[str], None]] = None
 
-        # 區域變數計時器 {var_name: start_timestamp}
+        # 區域變數與計時器 {var_name: value}
+        self._variables: dict = {}
         self._timers: dict = {}
+        self._active_scopes: dict = {}  # {var_name: end_node_id}
 
     def set_target_hwnd(self, hwnd: int):
         self._hwnd = hwnd
@@ -92,6 +94,8 @@ class Player:
         self._stop_flag.clear()
         self._pause_event.set()
         self._timers.clear()
+        self._variables.clear()
+        self._active_scopes.clear()
         self._thread = threading.Thread(
             target=self._run,
             args=(macro, mode, loop_count, random_delay, min_delay, max_delay),
@@ -214,6 +218,15 @@ class Player:
             node = nodes[curr_idx]
             step_count += 1
 
+            # 檢查是否有區域變數的作用範圍在此節點結束 (標示消除)
+            ended_vars = [v for v, end_id in list(self._active_scopes.items()) if end_id == node.id]
+            for v in ended_vars:
+                log_info(f"🏁 [區域範圍] 節點 [{curr_idx + 1}] 已到達變數 [{v}] 的作用範圍結束點，消除該變數與計時器")
+                self._timers.pop(v, None)
+                self._timers.pop(f"{v}_target", None)
+                self._variables.pop(v, None)
+                self._active_scopes.pop(v, None)
+
             # 等待暫停解除
             self._pause_event.wait()
             if self._stop_flag.is_set():
@@ -329,22 +342,81 @@ class Player:
         if t in (NodeType.COUNTER_BRANCH, "COUNTER_BRANCH"):
             import time
             var_name = getattr(node, "var_name", "X") or "X"
-            threshold_sec = getattr(node, "timer_seconds", 3.0)
-            now = time.time()
-            if var_name not in self._timers:
-                self._timers[var_name] = now
-                log_info(f"⏳ [計時分支] 區域變數 [{var_name}] 計時開始 (目標: {threshold_sec} 秒)")
+            b_mode = getattr(node, "branch_mode", "timer")
 
-            elapsed = now - self._timers[var_name]
-            # 判斷是否滿足觸發條件 (計時超過 X 秒)
-            if elapsed >= threshold_sec:
-                log_info(f"⚡ [計時分支] 變數 [{var_name}] 計時達 {elapsed:.1f}s (超過 {threshold_sec}s)，執行【觸發分支】！")
-                self._timers[var_name] = now  # 觸發後重置計時器起點
+            # 記錄此變數的作用結束節點 ID (若有設定)
+            scope_end_id = getattr(node, "var_scope_end_node_id", None)
+            if scope_end_id:
+                self._active_scopes[var_name] = scope_end_id
+
+            # 確保變數初始值存在 (預設 0.0)
+            if var_name not in self._variables:
+                init_v = getattr(node, "var_init_val", 0.0)
+                self._variables[var_name] = float(init_v)
+
+            is_condition_met = False
+
+            # ── 模式 1: 計時器模式 ──
+            if b_mode == "timer":
+                now = time.time()
+                if var_name not in self._timers:
+                    self._timers[var_name] = now
+                    # 決定目標數
+                    if getattr(node, "is_random_target", False):
+                        r_min = getattr(node, "random_min", 1.0)
+                        r_max = getattr(node, "random_max", 5.0)
+                        target_sec = random.uniform(min(r_min, r_max), max(r_min, r_max))
+                        self._timers[f"{var_name}_target"] = target_sec
+                        log_info(f"⏳ [計時器模式] 變數 [{var_name}] 啟動隨機目標計時 ({r_min}~{r_max}s，本輪目標: {target_sec:.2f}s)")
+                    else:
+                        target_sec = float(getattr(node, "timer_seconds", 3.0))
+                        self._timers[f"{var_name}_target"] = target_sec
+                        log_info(f"⏳ [計時器模式] 變數 [{var_name}] 計時開始 (目標: {target_sec}s)")
+
+                target_sec = self._timers.get(f"{var_name}_target", float(getattr(node, "timer_seconds", 3.0)))
+                elapsed = now - self._timers[var_name]
+                self._variables[var_name] = elapsed
+
+                if elapsed >= target_sec:
+                    is_condition_met = True
+                    log_info(f"⚡ [計時器模式] 變數 [{var_name}] 數至目標數 ({elapsed:.2f}s >= {target_sec:.2f}s)，觸發 If 分支！")
+                    if getattr(node, "auto_reset_on_target", True):
+                        # 數至目標數後自動消除/重置
+                        self._timers.pop(var_name, None)
+                        self._timers.pop(f"{var_name}_target", None)
+                        self._variables[var_name] = float(getattr(node, "var_init_val", 0.0))
+                        log_debug(f"🔄 [計時器模式] 變數 [{var_name}] 已達目標數，計數器消除重置至初始值")
+                else:
+                    log_debug(f"▶ [計時器模式] 變數 [{var_name}] 計時中 ({elapsed:.2f}s / {target_sec:.2f}s)，走 Else 分支")
+
+            # ── 模式 2: 區域變數比較大小模式 (Scratch 綠色比較方塊) ──
+            else:
+                curr_val = self._variables.get(var_name, float(getattr(node, "var_init_val", 0.0)))
+                op = getattr(node, "compare_op", ">")
+                target_val = float(getattr(node, "compare_target", 50.0))
+
+                if op == ">":
+                    is_condition_met = (curr_val > target_val)
+                elif op == "<":
+                    is_condition_met = (curr_val < target_val)
+                elif op in ("=", "=="):
+                    is_condition_met = abs(curr_val - target_val) < 1e-4
+                elif op == ">=":
+                    is_condition_met = (curr_val >= target_val)
+                elif op == "<=":
+                    is_condition_met = (curr_val <= target_val)
+                elif op == "!=":
+                    is_condition_met = abs(curr_val - target_val) >= 1e-4
+
+                res_str = "成立 ➔ If 分支 (右側)" if is_condition_met else "不成立 ➔ Else 分支 (上方)"
+                log_info(f"🔀 [變數比較] 判斷 [{var_name}={curr_val} {op} {target_val}] {res_str}")
+
+            # 滿足條件 (If 路線) vs 不滿足 (Else 路線)
+            if is_condition_met:
                 if node.on_trigger_nodes:
                     self._execute_nodes(node.on_trigger_nodes)
                 jump_target = getattr(node, "on_trigger_target_id", None)
             else:
-                log_debug(f"▶ [計時分支] 變數 [{var_name}] 計時中 ({elapsed:.1f}s / {threshold_sec}s)，執行【未觸發繼續】操作")
                 if node.on_continue_nodes:
                     self._execute_nodes(node.on_continue_nodes)
                 jump_target = getattr(node, "on_continue_target_id", None)

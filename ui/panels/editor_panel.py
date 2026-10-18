@@ -426,7 +426,7 @@ class EditorPanel(QWidget):
             node.pos_x = target_x
             node.pos_y = target_y
             from ui.dialogs.counter_branch_dialog import CounterBranchDialog
-            dlg = CounterBranchDialog(node, self)
+            dlg = CounterBranchDialog(node, self._macro.nodes, self)
             if dlg.exec():
                 new_node = dlg.get_node()
                 new_node.pos_x = target_x
@@ -504,7 +504,7 @@ class EditorPanel(QWidget):
     def _edit_node(self, node: MacroNode):
         if "COUNTER_BRANCH" in str(node.type):
             from ui.dialogs.counter_branch_dialog import CounterBranchDialog
-            dlg = CounterBranchDialog(node, self)
+            dlg = CounterBranchDialog(node, self._macro.nodes, self)
             if dlg.exec():
                 updated = dlg.get_node()
                 for i, n in enumerate(self._macro.nodes):

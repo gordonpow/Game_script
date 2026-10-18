@@ -119,6 +119,11 @@ class HorizontalAovNodeItem(QWidget):
     # ── 端口絕對座標定義 (向內縮排 14px 確保為 100% 完整無裁切圓形) ──
     def get_input_port_pos(self) -> QPoint:
         """取得輸入端點在畫布上的絕對座標"""
+        if "COUNTER_BRANCH" in str(self._node.type):
+            cx = self.width() // 2
+            cy = 58
+            d_size = 28
+            return QPoint(self.x() + cx - d_size, self.y() + cy)
         return QPoint(self.x() + 14, self.y() + 58)
 
     def get_output_port_pos(self) -> QPoint:
@@ -126,11 +131,21 @@ class HorizontalAovNodeItem(QWidget):
         return QPoint(self.x() + self.width() - 14, self.y() + 58)
 
     def get_trigger_port_pos(self) -> QPoint:
-        """取得分支【⚡觸發】輸出端點絕對座標"""
+        """取得分支【If/觸發】右頂點輸出端點絕對座標"""
+        if "COUNTER_BRANCH" in str(self._node.type):
+            cx = self.width() // 2
+            cy = 58
+            d_size = 28
+            return QPoint(self.x() + cx + d_size, self.y() + cy)
         return QPoint(self.x() + self.width() - 14, self.y() + 46)
 
     def get_continue_port_pos(self) -> QPoint:
-        """取得分支【▶繼續】輸出端點絕對座標"""
+        """取得分支【Else/繼續】上頂點輸出端點絕對座標 (如圖 1 頂部 else 出口)"""
+        if "COUNTER_BRANCH" in str(self._node.type):
+            cx = self.width() // 2
+            cy = 58
+            d_size = 28
+            return QPoint(self.x() + cx, self.y() + cy - d_size)
         return QPoint(self.x() + self.width() - 14, self.y() + 70)
 
     # ── 檢測滑鼠是否落在輸出端口圓點上 ─────────────────────────
@@ -146,20 +161,29 @@ class HorizontalAovNodeItem(QWidget):
             if (dx * dx + dy * dy) <= (20 * 20):
                 return "normal"
         else:
-            pt_trig = QPoint(w - 14, 46)
-            pt_cont = QPoint(w - 14, 70)
+            cx = w // 2
+            cy = 58
+            d_size = 28
+            pt_trig = QPoint(cx + d_size, cy)      # 右頂點 (if / 觸發)
+            pt_cont = QPoint(cx, cy - d_size)      # 上頂點 (else / 繼續)
             dx1, dy1 = pos.x() - pt_trig.x(), pos.y() - pt_trig.y()
-            if (dx1 * dx1 + dy1 * dy1) <= (19 * 19):
+            if (dx1 * dx1 + dy1 * dy1) <= (20 * 20):
                 return "trigger"
             dx2, dy2 = pos.x() - pt_cont.x(), pos.y() - pt_cont.y()
-            if (dx2 * dx2 + dy2 * dy2) <= (19 * 19):
+            if (dx2 * dx2 + dy2 * dy2) <= (20 * 20):
                 return "continue"
         return None
 
     # ── 檢測滑鼠是否落在輸入端口圓點上 ─────────────────────────
     def _hit_input_port(self, pos: QPoint) -> bool:
         """檢測滑鼠在節點內部座標是否位於輸入端口 (半徑 20px 感應範圍)"""
-        pt = QPoint(0, 58)
+        if "COUNTER_BRANCH" in str(self._node.type):
+            cx = self.width() // 2
+            cy = 58
+            d_size = 28
+            pt = QPoint(cx - d_size, cy)
+        else:
+            pt = QPoint(14, 58)
         dx = pos.x() - pt.x()
         dy = pos.y() - pt.y()
         return (dx * dx + dy * dy) <= (20 * 20)
@@ -381,16 +405,30 @@ class HorizontalAovNodeItem(QWidget):
         t_str = str(self._node.type)
         is_branch = ("COUNTER_BRANCH" in t_str)
 
-        # 1. 編輯動作
+        # 1. 編輯動作與模式切換
         if is_branch:
-            act_edit = menu.addAction("⏳  設定計時 X 秒與雙輸出分支")
+            act_edit = menu.addAction("⚙️  設定判斷條件與屬性 (Scratch 設定介面)...")
+            act_edit.triggered.connect(lambda: self.edit_requested.emit(self._node))
+
+            menu.addSeparator()
+
+            curr_mode = getattr(self._node, "branch_mode", "timer")
+            act_mode_timer = menu.addAction("⏱️  切換模式 ➔ 計時器模式 (Timer Mode)")
+            act_mode_timer.setCheckable(True)
+            act_mode_timer.setChecked(curr_mode == "timer")
+            act_mode_timer.triggered.connect(lambda: self._set_branch_mode("timer"))
+
+            act_mode_comp = menu.addAction("🔢  切換模式 ➔ 區域變數比較大小 (Scratch > < =)")
+            act_mode_comp.setCheckable(True)
+            act_mode_comp.setChecked(curr_mode == "compare")
+            act_mode_comp.triggered.connect(lambda: self._set_branch_mode("compare"))
         else:
             act_edit = menu.addAction("✏  更改鍵位 / 編輯屬性")
-        act_edit.triggered.connect(lambda: self.edit_requested.emit(self._node))
+            act_edit.triggered.connect(lambda: self.edit_requested.emit(self._node))
 
         menu.addSeparator()
 
-        # 2. 🔗 自訂箭頭連線去哪裡 (亦可直接點右側小圓點拖曳)
+        # 2. 🔗 自訂箭頭連線去哪裡 (亦可直接點右側/上側小圓點拖曳)
         letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
         if not is_branch:
@@ -419,7 +457,7 @@ class HorizontalAovNodeItem(QWidget):
                 act_item.triggered.connect(lambda checked, tid=target_n.id: self._set_next_target(tid))
 
         else:
-            menu_trig = menu.addMenu("⚡  調整【觸發分支】連線至...")
+            menu_trig = menu.addMenu("⚡  調整【If 成立分支】連線至 (右側頂點)...")
             act_trig_none = menu_trig.addAction("❌ 未指定目標 (僅執行分支內部動作)")
             act_trig_none.setCheckable(True)
             act_trig_none.setChecked(self._node.on_trigger_target_id is None)
@@ -435,7 +473,7 @@ class HorizontalAovNodeItem(QWidget):
                 act_item.setChecked(self._node.on_trigger_target_id == target_n.id)
                 act_item.triggered.connect(lambda checked, tid=target_n.id: self._set_trigger_target(tid))
 
-            menu_cont = menu.addMenu("▶  調整【繼續分支】連線至...")
+            menu_cont = menu.addMenu("↪  調整【Else 分支】連線至 (圖1上頂點)...")
             act_cont_def = menu_cont.addAction("🔁 自動依序連線 (預設下一節點)")
             act_cont_def.setCheckable(True)
             act_cont_def.setChecked(self._node.on_continue_target_id is None)
@@ -542,6 +580,14 @@ class HorizontalAovNodeItem(QWidget):
             zoom = getattr(graph_area._canvas, "_zoom_factor", 1.0)
             graph_area._canvas.add_node_at_pos_requested.emit(node_type, x / zoom, y / zoom)
 
+    def _set_branch_mode(self, mode: str):
+        """切換分支模式 (timer / compare)"""
+        self._node.branch_mode = mode
+        self.connection_changed.emit(self._node)
+        self.update()
+        if self.parent():
+            self.parent().update()
+
     def _set_next_target(self, tid: Optional[str]):
         self._node.next_node_id = tid
         self.connection_changed.emit(self._node)
@@ -582,9 +628,16 @@ class HorizontalAovNodeItem(QWidget):
             painter.drawRoundedRect(bg_sel, 8, 8)
 
         # 2. 決定節點色彩
+        branch_mode = getattr(self._node, "branch_mode", "timer")
+        d_size = 28  # 菱形尺寸
+
         if is_branch:
-            circle_color = QColor("#fbbf24")  # 計時分支：琥珀金
-            border_color = QColor("#d97706")
+            if branch_mode == "compare":
+                circle_color = QColor("#15803d")  # Scratch 經典綠 (Compare 模式)
+                border_color = QColor("#4ade80")
+            else:
+                circle_color = QColor("#b45309")  # 計時琥珀金色 (Timer 模式)
+                border_color = QColor("#fde047")
         elif "GAMEPAD" in t_str:
             circle_color = QColor("#c084fc")  # 搖桿：粉紫
             border_color = QColor("#9333ea")
@@ -603,9 +656,9 @@ class HorizontalAovNodeItem(QWidget):
 
         # 3. 頂部角色徽章
         if is_branch:
-            role_text = "➔ BRANCH"
-            badge_bg = QColor("#78350f")
-            badge_fg = QColor("#fde68a")
+            role_text = "⏱ TIMER" if branch_mode == "timer" else "🔢 COMPARE"
+            badge_bg = QColor("#78350f" if branch_mode == "timer" else "#14532d")
+            badge_fg = QColor("#fde68a" if branch_mode == "timer" else "#86efac")
         elif self._index == 0:
             role_text = "➔ ROOT"
             badge_bg = QColor("#0369a1")
@@ -619,7 +672,7 @@ class HorizontalAovNodeItem(QWidget):
             badge_bg = QColor("#1e293b")
             badge_fg = QColor("#94a3b8")
 
-        badge_w = 66
+        badge_w = 76
         badge_h = 18
         badge_x = cx - badge_w // 2
         badge_y = 6
@@ -633,97 +686,160 @@ class HorizontalAovNodeItem(QWidget):
         painter.drawText(QRect(badge_x, badge_y, badge_w, badge_h), Qt.AlignmentFlag.AlignCenter, role_text)
 
         # 4. 執行中光暈 / 選取光環
-        if self._is_executing:
-            glow_color = QColor(250, 204, 21, 140)
-            painter.setBrush(QBrush(glow_color))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawEllipse(QPoint(cx, cy), radius + 7, radius + 7)
-            circle_color = QColor("#fde047")
-            border_color = QColor("#ca8a04")
-        elif self._is_selected:
-            painter.setBrush(QBrush(QColor(56, 189, 248, 80)))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawEllipse(QPoint(cx, cy), radius + 5, radius + 5)
-
-        # 5. 繪製中央圓圈頂點
-        painter.setBrush(QBrush(circle_color))
-        painter.setPen(QPen(border_color, 2.5))
-        painter.drawEllipse(QPoint(cx, cy), radius, radius)
-
-        t_enum = self._node.type
-
-        # 圓圈內部標籤：優先顯示按下按鍵 (使用者需求：節點上顯示按下按鍵)
         if is_branch:
-            label_text = f"{getattr(self._node, 'var_name', 'X')}"
-        elif t_enum in (NodeType.KEY_CLICK, NodeType.KEY_DOWN, NodeType.KEY_UP) and self._node.key:
-            k = self._node.key.upper()
-            mapping = {
-                "SPACE": "␣",
-                "ENTER": "↵",
-                "BACKSPACE": "⌫",
-                "TAB": "⇥",
-                "ESCAPE": "ESC",
-                "DELETE": "DEL",
-                "INSERT": "INS",
-                "UP": "↑",
-                "DOWN": "↓",
-                "LEFT": "←",
-                "RIGHT": "→",
-                "PAGEUP": "PU",
-                "PAGEDOWN": "PD",
-                "LCTRL": "CTRL",
-                "RCTRL": "CTRL",
-                "LSHIFT": "SHFT",
-                "RSHIFT": "SHFT",
-                "LALT": "ALT",
-                "RALT": "ALT",
-                "LWIN": "WIN",
-                "RWIN": "WIN",
-            }
-            label_text = mapping.get(k, k)
-        elif t_enum == NodeType.MOUSE_CLICK:
-            b_map = {"left": "🖱左", "right": "🖱右", "middle": "🖱中"}
-            btn = getattr(self._node, "button", "left")
-            label_text = b_map.get(str(btn).lower(), "🖱")
-        elif t_enum == NodeType.MOUSE_MOVE:
-            label_text = "🖱移"
-        elif t_enum == NodeType.MOUSE_SCROLL:
-            label_text = "滾輪"
-        elif t_enum == NodeType.GAMEPAD_BUTTON:
-            btn = getattr(self._node, "gamepad_button", "A")
-            label_text = f"🎮{btn}"
-        elif t_enum == NodeType.GAMEPAD_AXIS:
-            ax = getattr(self._node, "gamepad_axis", "LX")
-            label_text = str(ax).upper()
-        elif t_enum in (NodeType.WAIT_FIXED, NodeType.WAIT_RANDOM):
-            label_text = "⏱"
+            diamond_pts = [
+                QPoint(cx, cy - d_size),      # 上頂點 (else 出口)
+                QPoint(cx + d_size, cy),      # 右頂點 (if / 觸發出口)
+                QPoint(cx, cy + d_size),      # 下頂點
+                QPoint(cx - d_size, cy)       # 左頂點 (輸入)
+            ]
+            diamond_poly = QPolygon(diamond_pts)
+
+            if self._is_executing:
+                glow_color = QColor(250, 204, 21, 140)
+                painter.setBrush(QBrush(glow_color))
+                painter.setPen(Qt.PenStyle.NoPen)
+                glow_diamond = QPolygon([
+                    QPoint(cx, cy - d_size - 6),
+                    QPoint(cx + d_size + 6, cy),
+                    QPoint(cx, cy + d_size + 6),
+                    QPoint(cx - d_size - 6, cy)
+                ])
+                painter.drawPolygon(glow_diamond)
+            elif self._is_selected:
+                painter.setBrush(QBrush(QColor(56, 189, 248, 70)))
+                painter.setPen(Qt.PenStyle.NoPen)
+                glow_diamond = QPolygon([
+                    QPoint(cx, cy - d_size - 4),
+                    QPoint(cx + d_size + 4, cy),
+                    QPoint(cx, cy + d_size + 4),
+                    QPoint(cx - d_size - 4, cy)
+                ])
+                painter.drawPolygon(glow_diamond)
+
+            # 5. 繪製菱形主體 (如圖 1 菱形 If/Else 方塊)
+            painter.setBrush(QBrush(circle_color))
+            painter.setPen(QPen(border_color, 2.5))
+            painter.drawPolygon(diamond_poly)
+
+            # 🎯 如圖 1 在頂部出口處醒目標註 "else"
+            font_else = QFont("Consolas", 9, QFont.Weight.Bold)
+            painter.setFont(font_else)
+            painter.setPen(QColor("#fb7185"))
+            painter.drawText(QRect(cx + 6, cy - d_size - 14, 40, 16), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "else")
+
+            # 菱形內部文字 (如圖 2 Scratch 綠色積木)
+            var_name = getattr(self._node, "var_name", "X")
+            painter.setPen(QColor("#ffffff"))
+            font_diamond_title = QFont("Consolas", 8, QFont.Weight.Bold)
+            painter.setFont(font_diamond_title)
+
+            if branch_mode == "compare":
+                op = getattr(self._node, "compare_op", ">")
+                target = getattr(self._node, "compare_target", 50)
+                line1 = f"{var_name}"
+                line2 = f"{op} {target}"
+            else:
+                is_rnd = getattr(self._node, "is_random_target", False)
+                if is_rnd:
+                    line1 = f"🎲{var_name}"
+                    line2 = f"{getattr(self._node, 'random_min', 1.0)}~{getattr(self._node, 'random_max', 5.0)}s"
+                else:
+                    line1 = f"⏱{var_name}"
+                    line2 = f"{getattr(self._node, 'timer_seconds', 3.0)}s"
+
+            # 繪製內部兩行精準置中文字
+            painter.drawText(QRect(cx - d_size + 2, cy - 14, (d_size - 2) * 2, 13), Qt.AlignmentFlag.AlignCenter, line1)
+            painter.setPen(QColor("#fef08a"))
+            font_diamond_sub = QFont("Consolas", 7, QFont.Weight.Bold)
+            painter.setFont(font_diamond_sub)
+            painter.drawText(QRect(cx - d_size + 2, cy - 1, (d_size - 2) * 2, 13), Qt.AlignmentFlag.AlignCenter, line2)
+
         else:
-            letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-            label_text = letters[self._index] if self._index < len(letters) else f"{self._index + 1:02d}"
+            # 普通節點繪製圓圈
+            if self._is_executing:
+                glow_color = QColor(250, 204, 21, 140)
+                painter.setBrush(QBrush(glow_color))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawEllipse(QPoint(cx, cy), radius + 7, radius + 7)
+                circle_color = QColor("#fde047")
+                border_color = QColor("#ca8a04")
+            elif self._is_selected:
+                painter.setBrush(QBrush(QColor(56, 189, 248, 80)))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawEllipse(QPoint(cx, cy), radius + 5, radius + 5)
 
-        # 依字元長度動態調整字體大小，確保完整清晰居中
-        if len(label_text) <= 2:
-            font_size = 13
-        elif len(label_text) == 3:
-            font_size = 10
-        elif len(label_text) == 4:
-            font_size = 8
-        else:
-            font_size = 7
+            # 5. 繪製中央圓圈頂點
+            painter.setBrush(QBrush(circle_color))
+            painter.setPen(QPen(border_color, 2.5))
+            painter.drawEllipse(QPoint(cx, cy), radius, radius)
 
-        painter.setPen(QColor("#0f172a"))
-        font_circle = QFont("Consolas", font_size, QFont.Weight.Bold)
-        painter.setFont(font_circle)
-        painter.drawText(QRect(cx - radius, cy - radius, radius * 2, radius * 2), Qt.AlignmentFlag.AlignCenter, label_text)
+            t_enum = self._node.type
+            if t_enum in (NodeType.KEY_CLICK, NodeType.KEY_DOWN, NodeType.KEY_UP) and self._node.key:
+                k = self._node.key.upper()
+                mapping = {
+                    "SPACE": "␣", "ENTER": "↵", "BACKSPACE": "⌫", "TAB": "⇥",
+                    "ESCAPE": "ESC", "DELETE": "DEL", "INSERT": "INS", "UP": "↑",
+                    "DOWN": "↓", "LEFT": "←", "RIGHT": "→", "PAGEUP": "PU",
+                    "PAGEDOWN": "PD", "LCTRL": "CTRL", "RCTRL": "CTRL",
+                    "LSHIFT": "SHFT", "RSHIFT": "SHFT", "LALT": "ALT",
+                    "RALT": "ALT", "LWIN": "WIN", "RWIN": "WIN",
+                }
+                label_text = mapping.get(k, k)
+            elif t_enum == NodeType.MOUSE_CLICK:
+                b_map = {"left": "🖱左", "right": "🖱右", "middle": "🖱中"}
+                btn = getattr(self._node, "button", "left")
+                label_text = b_map.get(str(btn).lower(), "🖱")
+            elif t_enum == NodeType.MOUSE_MOVE:
+                label_text = "🖱移"
+            elif t_enum == NodeType.MOUSE_SCROLL:
+                label_text = "滾輪"
+            elif t_enum == NodeType.GAMEPAD_BUTTON:
+                btn = getattr(self._node, "gamepad_button", "A")
+                label_text = f"🎮{btn}"
+            elif t_enum == NodeType.GAMEPAD_AXIS:
+                ax = getattr(self._node, "gamepad_axis", "LX")
+                label_text = str(ax).upper()
+            elif t_enum in (NodeType.WAIT_FIXED, NodeType.WAIT_RANDOM):
+                label_text = "⏱"
+            else:
+                letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                label_text = letters[self._index] if self._index < len(letters) else f"{self._index + 1:02d}"
 
-        # 6. 下方文字標籤 (第1行動作類型，第2行明確標示「按下時間」)
+            # 依字元長度動態調整字體大小，確保完整清晰居中
+            if len(label_text) <= 2:
+                font_size = 13
+            elif len(label_text) == 3:
+                font_size = 10
+            elif len(label_text) == 4:
+                font_size = 8
+            else:
+                font_size = 7
+
+            painter.setPen(QColor("#0f172a"))
+            font_circle = QFont("Consolas", font_size, QFont.Weight.Bold)
+            painter.setFont(font_circle)
+            painter.drawText(QRect(cx - radius, cy - radius, radius * 2, radius * 2), Qt.AlignmentFlag.AlignCenter, label_text)
+
+        # 6. 下方文字標籤 (第1行動作類型，第2行明確標示「按下時間 / 範圍」)
         painter.setPen(QColor("#ffffff" if not self._is_selected else "#38bdf8"))
         font_name = QFont("Consolas", 9, QFont.Weight.Bold)
         painter.setFont(font_name)
         text_rect_name = QRect(4, cy + radius + 8, w - 8, 20)
 
+        t_enum = self._node.type
         if is_branch:
-            disp_name = f"變數[{self._node.var_name}] {self._node.timer_seconds}s"
+            var_name = getattr(self._node, "var_name", "X")
+            if branch_mode == "compare":
+                op = getattr(self._node, "compare_op", ">")
+                tgt = getattr(self._node, "compare_target", 50)
+                disp_name = f"判斷 [{var_name} {op} {tgt}]"
+            else:
+                is_rnd = getattr(self._node, "is_random_target", False)
+                if is_rnd:
+                    disp_name = f"計時變數 [{var_name}] 隨機"
+                else:
+                    disp_name = f"計時變數 [{var_name}] {self._node.timer_seconds}s"
         elif t_enum in (NodeType.KEY_CLICK, NodeType.KEY_DOWN, NodeType.KEY_UP):
             act = "點擊" if t_enum == NodeType.KEY_CLICK else ("按下" if t_enum == NodeType.KEY_DOWN else "釋放")
             disp_name = f"{act} [{self._node.key.upper()}]"
@@ -737,12 +853,24 @@ class HorizontalAovNodeItem(QWidget):
         truncated_name = disp_name if len(disp_name) <= 15 else disp_name[:14] + "…"
         painter.drawText(text_rect_name, Qt.AlignmentFlag.AlignCenter, truncated_name)
 
-        # 次要時長資訊：明確展示「按下時間」
+        # 次要時長資訊 / 變數範圍資訊
         sub_text = ""
         is_highlight_time = False
         if is_branch:
-            trig_count = len(getattr(self._node, "on_trigger_nodes", []))
-            sub_text = f"觸發動作: {trig_count} 個"
+            var_name = getattr(self._node, "var_name", "X")
+            end_id = getattr(self._node, "var_scope_end_node_id", None)
+            if end_id:
+                # 尋找結束節點標籤
+                letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                end_tag = None
+                for idx, n in enumerate(self._all_nodes):
+                    if n.id == end_id:
+                        end_tag = letters[idx] if idx < len(letters) else f"{idx+1}"
+                        break
+                sub_text = f"範圍: 至節點[{end_tag}]" if end_tag else "範圍: 指定結束"
+                is_highlight_time = True
+            else:
+                sub_text = "範圍: 達標自動消除"
         elif t_enum == NodeType.KEY_CLICK and getattr(self._node, "key_hold_ms", 0) > 0:
             sub_text = f"按下: {self._node.key_hold_ms}ms"
             is_highlight_time = True
@@ -775,7 +903,7 @@ class HorizontalAovNodeItem(QWidget):
 
         # ── 7. 繪製輸入端口與輸出端口 (含磁吸高亮與懸停動畫，100% 完整圓形) ────
         # (A) 左側輸入端口 (Input Port)
-        in_pt = QPoint(14, 58)
+        in_pt = QPoint(cx - d_size, cy) if is_branch else QPoint(14, 58)
         if self._is_input_snapped:
             # 🧲 磁吸高亮中！繪製亮綠色擴散光圈
             painter.setBrush(QBrush(QColor(74, 222, 128, 90)))
@@ -804,27 +932,27 @@ class HorizontalAovNodeItem(QWidget):
             painter.setPen(QPen(QColor("#0f172a"), 1.5))
             painter.drawEllipse(out_pt, r, r)
         else:
-            # 觸發端口 (金色)
-            trig_pt = QPoint(w - 14, 46)
+            # 觸發端口 / If 端口 (右頂點)
+            trig_pt = QPoint(cx + d_size, cy)
             is_hov_trig = (self._hovered_port == "trigger" or (self._is_wiring and self._wiring_port == "trigger"))
             r_t = 7 if is_hov_trig else PORT_RADIUS
             if is_hov_trig:
-                painter.setBrush(QBrush(QColor(251, 191, 36, 80)))
+                painter.setBrush(QBrush(QColor(74, 222, 128, 90)))
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.drawEllipse(trig_pt, r_t + 4, r_t + 4)
-            painter.setBrush(QBrush(QColor("#fbbf24")))
+            painter.setBrush(QBrush(QColor("#4ade80")))
             painter.setPen(QPen(QColor("#0f172a"), 1.5))
             painter.drawEllipse(trig_pt, r_t, r_t)
 
-            # 繼續端口 (天藍色)
-            cont_pt = QPoint(w - 14, 70)
+            # 繼續端口 / Else 端口 (如圖 1 上頂點出口)
+            cont_pt = QPoint(cx, cy - d_size)
             is_hov_cont = (self._hovered_port == "continue" or (self._is_wiring and self._wiring_port == "continue"))
             r_c = 7 if is_hov_cont else PORT_RADIUS
             if is_hov_cont:
-                painter.setBrush(QBrush(QColor(56, 189, 248, 80)))
+                painter.setBrush(QBrush(QColor(248, 113, 113, 90)))
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.drawEllipse(cont_pt, r_c + 4, r_c + 4)
-            painter.setBrush(QBrush(QColor("#38bdf8")))
+            painter.setBrush(QBrush(QColor("#fb7185")))
             painter.setPen(QPen(QColor("#0f172a"), 1.5))
             painter.drawEllipse(cont_pt, r_c, r_c)
 
@@ -1155,6 +1283,48 @@ class AovGraphArea(QWidget):
 
         node_item_map: Dict[str, HorizontalAovNodeItem] = {it.node.id: it for it in items}
 
+        # ── 2.1 繪製區域變數作用範圍 (Scope Range) 與結束位置標示 ──
+        for it in items:
+            node = it.node
+            if "COUNTER_BRANCH" in str(node.type):
+                end_id = getattr(node, "var_scope_end_node_id", None)
+                var_name = getattr(node, "var_name", "X")
+                if end_id and end_id in node_item_map:
+                    end_it = node_item_map[end_id]
+                    # 計算包覆兩節點之邊界範圍框
+                    min_x = min(it.x(), end_it.x()) - 16
+                    max_x = max(it.x() + it.width(), end_it.x() + end_it.width()) + 16
+                    min_y = min(it.y(), end_it.y()) - 36
+                    max_y = max(it.y() + it.height(), end_it.y() + end_it.height()) + 16
+                    scope_rect = QRect(min_x, min_y, max_x - min_x, max_y - min_y)
+
+                    # 範圍底色與科技虛線邊框
+                    painter.setBrush(QBrush(QColor(34, 197, 94, 20)))
+                    painter.setPen(QPen(QColor(74, 222, 128, 160), 1.8, Qt.PenStyle.DashDotLine))
+                    painter.drawRoundedRect(scope_rect, 10, 10)
+
+                    # 範圍左上角標籤
+                    lbl_w = 175
+                    lbl_rect = QRect(min_x + 8, min_y - 11, lbl_w, 20)
+                    painter.setBrush(QBrush(QColor("#064e3b")))
+                    painter.setPen(QPen(QColor("#10b981"), 1.2))
+                    painter.drawRoundedRect(lbl_rect, 4, 4)
+                    painter.setPen(QColor("#6ee7b7"))
+                    painter.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
+                    painter.drawText(lbl_rect, Qt.AlignmentFlag.AlignCenter, f"⏱️ 變數[{var_name}] 作用範圍 ➔")
+
+                    # 在結束節點上方標記結束消除徽章 (End Marker)
+                    end_badge_w = 115
+                    end_badge_x = end_it.x() + (end_it.width() - end_badge_w) // 2
+                    end_badge_y = end_it.y() - 30
+                    end_rect = QRect(end_badge_x, end_badge_y, end_badge_w, 22)
+                    painter.setBrush(QBrush(QColor("#450a0a")))
+                    painter.setPen(QPen(QColor("#ef4444"), 1.5))
+                    painter.drawRoundedRect(end_rect, 5, 5)
+                    painter.setPen(QColor("#fca5a5"))
+                    painter.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
+                    painter.drawText(end_rect, Qt.AlignmentFlag.AlignCenter, f"🏁 [{var_name}] 結束消除")
+
         for idx, it in enumerate(items):
             node = it.node
             t_str = str(node.type)
@@ -1165,7 +1335,6 @@ class AovGraphArea(QWidget):
                 target_id = node.next_node_id
                 target_item = None
                 if target_id == "__END__":
-                    # 斷開/結束狀態，不繪製連線箭頭
                     continue
                 elif target_id and target_id in node_item_map:
                     target_item = node_item_map[target_id]
@@ -1178,28 +1347,26 @@ class AovGraphArea(QWidget):
                     color = QColor("#38bdf8") if not it._is_executing else QColor("#facc15")
                     edge_dict = {"source_item": it, "target_item": target_item, "port_type": "normal"}
                     self._draw_curve_arrow(painter, p_start, p_end, color, edge_info=edge_dict)
-                # 🎯 未連接或最後一個節點：不繪製任何斷頭箭頭！
 
             else:
                 # 分支判斷節點（BRANCH）雙連線：
-                # 🎯 核心要求：有判斷條件時 節點不要附帶箭頭！未連接時不繪製懸空斷頭箭頭！
-                # (1) ⚡ 觸發分支
+                # (1) ⚡ If / 觸發分支 (右側頂點筆直/平滑輸出)
                 trig_id = node.on_trigger_target_id
                 if trig_id and trig_id in node_item_map:
                     tgt = node_item_map[trig_id]
                     p_start = it.get_trigger_port_pos()
                     p_end = tgt.get_input_port_pos()
                     edge_dict = {"source_item": it, "target_item": tgt, "port_type": "trigger"}
-                    self._draw_curve_arrow(painter, p_start, p_end, QColor("#fbbf24"), label="⚡ 觸發", edge_info=edge_dict)
+                    self._draw_curve_arrow(painter, p_start, p_end, QColor("#4ade80"), label="⚡ if", edge_info=edge_dict)
 
-                # (2) ▶ 繼續分支
+                # (2) ↪ Else / 繼續分支 (如圖 1 頂部 else 折角連線)
                 cont_id = node.on_continue_target_id
                 if cont_id and cont_id in node_item_map:
                     tgt = node_item_map[cont_id]
                     p_start = it.get_continue_port_pos()
                     p_end = tgt.get_input_port_pos()
                     edge_dict = {"source_item": it, "target_item": tgt, "port_type": "continue"}
-                    self._draw_curve_arrow(painter, p_start, p_end, QColor("#38bdf8"), label="▶ 繼續", edge_info=edge_dict)
+                    self._draw_curve_arrow(painter, p_start, p_end, QColor("#fb7185"), label="else", edge_info=edge_dict, port_type="continue")
 
         # ── 3. 繪製正在拖曳中的連線與磁吸箭頭 ─────────────────
         if self._is_wiring:
@@ -1207,12 +1374,14 @@ class AovGraphArea(QWidget):
             if self._snapped_target_item:
                 wire_color = QColor("#4ade80")
             elif self._wiring_port_type == "trigger":
-                wire_color = QColor("#fbbf24")
+                wire_color = QColor("#4ade80")
+            elif self._wiring_port_type == "continue":
+                wire_color = QColor("#fb7185")
             else:
                 wire_color = QColor("#38bdf8")
 
-            label = "⚡ 觸發" if self._wiring_port_type == "trigger" else ("▶ 繼續" if self._wiring_port_type == "continue" else "")
-            self._draw_curve_arrow(painter, self._wiring_start_pt, self._wiring_current_pt, wire_color, label=label, is_wiring=True)
+            label = "⚡ if" if self._wiring_port_type == "trigger" else ("else" if self._wiring_port_type == "continue" else "")
+            self._draw_curve_arrow(painter, self._wiring_start_pt, self._wiring_current_pt, wire_color, label=label, is_wiring=True, port_type=self._wiring_port_type)
 
     def _draw_curve_arrow(
         self,
@@ -1222,7 +1391,8 @@ class AovGraphArea(QWidget):
         color: QColor,
         label: str = "",
         is_wiring: bool = False,
-        edge_info: Optional[Dict] = None
+        edge_info: Optional[Dict] = None,
+        port_type: str = "normal"
     ):
         dx = p2.x() - p1.x()
         dy = p2.y() - p1.y()
@@ -1230,8 +1400,23 @@ class AovGraphArea(QWidget):
         path = QPainterPath()
         path.moveTo(QPointF(p1))
 
-        # 🎯 若在同一水平線 (允許 4px 容差)，以 100% 水平打直直線連接！
-        if abs(dy) <= 4:
+        # 🎯 如圖 1：Else 分支從上頂點出發，向上延伸 25px，然後水平折角向右！
+        if port_type == "continue":
+            up_y = p1.y() - 25
+            path.lineTo(QPointF(p1.x(), up_y))
+            if p2.x() > p1.x() + 20:
+                # 折向右邊
+                ctrl_x = max(p1.x() + 30, p2.x() - 35)
+                c1 = QPoint(ctrl_x, up_y)
+                c2 = QPoint(ctrl_x, p2.y())
+                path.cubicTo(QPointF(c1), QPointF(c2), QPointF(p2))
+            else:
+                ctrl_offset = max(40, abs(dx) * 0.45)
+                c1 = QPoint(p1.x(), int(up_y - ctrl_offset))
+                c2 = QPoint(int(p2.x() - ctrl_offset), p2.y())
+                path.cubicTo(QPointF(c1), QPointF(c2), QPointF(p2))
+        elif abs(dy) <= 4:
+            # 🎯 水平打直直線連接
             p2_straight = QPoint(p2.x(), p1.y())
             path.lineTo(QPointF(p2_straight))
             c2 = QPoint(p1.x(), p1.y())

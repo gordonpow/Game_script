@@ -254,7 +254,7 @@ class HorizontalAovNodeItem(QWidget):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        if event.buttons() & Qt.MouseButton.MiddleButton:
+        if event.buttons() & (Qt.MouseButton.MiddleButton | Qt.MouseButton.RightButton):
             graph_area = self.parent()
             if graph_area and hasattr(graph_area, "mouseMoveEvent"):
                 graph_area.mouseMoveEvent(event)
@@ -273,9 +273,7 @@ class HorizontalAovNodeItem(QWidget):
             # 正在移動節點
             delta = event.globalPosition().toPoint() - self._drag_start_pos
             new_pos = self._drag_node_pos + delta
-            nx = max(GRID_SIZE, new_pos.x())
-            ny = max(GRID_SIZE, new_pos.y())
-            self.move(nx, ny)
+            self.move(new_pos.x(), new_pos.y())
             if self.parent():
                 self.parent().update()
         else:
@@ -297,7 +295,7 @@ class HorizontalAovNodeItem(QWidget):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.MiddleButton:
+        if event.button() in (Qt.MouseButton.MiddleButton, Qt.MouseButton.RightButton):
             graph_area = self.parent()
             if graph_area and hasattr(graph_area, "mouseReleaseEvent"):
                 graph_area.mouseReleaseEvent(event)
@@ -321,6 +319,13 @@ class HorizontalAovNodeItem(QWidget):
             # 🎯 嚴格使用世界座標換算並吸附網格 (防止滾輪縮放時座標亂跳)
             world_x = round((self.x() / zoom) / GRID_SIZE) * GRID_SIZE
             world_y = round((self.y() / zoom) / GRID_SIZE) * GRID_SIZE
+
+            # 🎯 draw.io 無限畫布：若往左或往上拖曳，自動向左/向上開闢空間並無縫平移
+            graph_area = self.parent()
+            canvas = getattr(graph_area, "_canvas", None)
+            if canvas and hasattr(canvas, "check_expand_left_top"):
+                world_x, world_y = canvas.check_expand_left_top(world_x, world_y)
+
             world_x = max(50, world_x)
             world_y = max(50, world_y)
 
@@ -340,6 +345,10 @@ class HorizontalAovNodeItem(QWidget):
             self._node.pos_y = float(world_y)
             self.move(int(world_x * zoom), int(world_y * zoom))
             self.node_moved.emit(self._node)
+
+            # 🎯 draw.io 無限畫布：確保右方與下方空間富餘
+            if canvas and hasattr(canvas, "ensure_canvas_bounds"):
+                canvas.ensure_canvas_bounds(world_x, world_y)
 
             if self.parent():
                 self.parent().update()
@@ -905,7 +914,7 @@ class AovGraphArea(QWidget):
         super().__init__(parent)
         self._canvas = canvas
         self.setAcceptDrops(True)
-        self.setMinimumSize(3600, 2600)  # 超寬廣網格畫布
+        self.setMinimumSize(12000, 8000)  # draw.io 級超大無限網格畫布 (隨滾動/拖曳自動擴展)
         self.setMouseTracking(True)
 
         # ── 拖曳拉線互動狀態 ──
@@ -920,9 +929,13 @@ class AovGraphArea(QWidget):
         self._drawn_edges: List[Dict] = []
         self._selected_edge: Optional[Dict] = None
 
-        # ── 中鍵平移 ──
+        # ── draw.io 級極致平移狀態 (支援右鍵拖曳、中鍵拖曳、空白鍵+左鍵、空白處左鍵拖曳) ──
         self._is_panning = False
+        self._is_right_panning = False
+        self._space_held = False
         self._pan_start_pos = QPoint()
+        self._right_press_pos = QPoint()
+        self._suppress_context_menu = False
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def _get_canvas_items(self) -> List[HorizontalAovNodeItem]:
@@ -1079,7 +1092,24 @@ class AovGraphArea(QWidget):
             event.accept()
             return
 
-        # 2. 左鍵點擊 ➔ 檢測是否點中某條箭頭貝茲曲線
+        # 2. 右鍵按下 ➔ 記錄起點 (若拖曳超過 5px 則平移畫布，若原地釋放則彈出右鍵選單)
+        if event.button() == Qt.MouseButton.RightButton:
+            self._is_right_panning = False
+            self._suppress_context_menu = False
+            self._pan_start_pos = event.globalPosition().toPoint()
+            self._right_press_pos = event.pos()
+            event.accept()
+            return
+
+        # 3. 空白鍵按住 + 左鍵 ➔ 平移畫布
+        if event.button() == Qt.MouseButton.LeftButton and self._space_held:
+            self._is_panning = True
+            self._pan_start_pos = event.globalPosition().toPoint()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+            return
+
+        # 4. 左鍵點擊 ➔ 檢測是否點中某條箭頭連線
         if event.button() == Qt.MouseButton.LeftButton:
             click_pt = event.pos()
             hit_edge = None
@@ -1105,11 +1135,36 @@ class AovGraphArea(QWidget):
                 if self._selected_edge is not None:
                     self._selected_edge = None
                     self.update()
+                # 點擊在畫布完全空白處 ➔ 支援直接拖曳平移畫布 (draw.io 經典手勢)
+                self._is_panning = True
+                self._pan_start_pos = event.globalPosition().toPoint()
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
+                event.accept()
+                return
 
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        # 中鍵拖曳 ➔ 平移畫布
+        # 1. 右鍵拖曳 ➔ 平移畫布
+        if event.buttons() & Qt.MouseButton.RightButton:
+            if not self._is_right_panning:
+                if (event.globalPosition().toPoint() - self._pan_start_pos).manhattanLength() > 5:
+                    self._is_right_panning = True
+                    self._suppress_context_menu = True
+                    self.setCursor(Qt.CursorShape.ClosedHandCursor)
+
+            if self._is_right_panning:
+                delta = event.globalPosition().toPoint() - self._pan_start_pos
+                self._pan_start_pos = event.globalPosition().toPoint()
+                if self._canvas:
+                    hbar = self._canvas.horizontalScrollBar()
+                    vbar = self._canvas.verticalScrollBar()
+                    hbar.setValue(hbar.value() - delta.x())
+                    vbar.setValue(vbar.value() - delta.y())
+                event.accept()
+                return
+
+        # 2. 中鍵 / 空白鍵 / 空白處左鍵拖曳 ➔ 平移畫布
         if self._is_panning:
             delta = event.globalPosition().toPoint() - self._pan_start_pos
             self._pan_start_pos = event.globalPosition().toPoint()
@@ -1134,6 +1189,25 @@ class AovGraphArea(QWidget):
             event.accept()
             return
 
+        if event.button() == Qt.MouseButton.RightButton:
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            if self._is_right_panning:
+                self._is_right_panning = False
+                self._suppress_context_menu = True
+                event.accept()
+                return
+            else:
+                self._is_right_panning = False
+                # 原地單擊右鍵 ➔ 彈出右鍵選單
+                self._show_canvas_context_menu(event.globalPosition().toPoint(), event.pos())
+                event.accept()
+                return
+
+        if event.button() == Qt.MouseButton.LeftButton:
+            if self._is_panning:
+                self._is_panning = False
+                self.setCursor(Qt.CursorShape.OpenHandCursor if self._space_held else Qt.CursorShape.ArrowCursor)
+
         if self._is_wiring:
             self.finish_wiring()
             event.accept()
@@ -1141,15 +1215,38 @@ class AovGraphArea(QWidget):
         super().mouseReleaseEvent(event)
 
     def keyPressEvent(self, event: QKeyEvent):
-        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            self._space_held = True
+            if not self._is_panning:
+                self.setCursor(Qt.CursorShape.OpenHandCursor)
+            event.accept()
+            return
+        elif event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             if self._selected_edge:
                 self.delete_selected_edge()
                 event.accept()
                 return
         super().keyPressEvent(event)
 
+    def keyReleaseEvent(self, event: QKeyEvent):
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            self._space_held = False
+            if not self._is_panning:
+                self.setCursor(Qt.CursorShape.ArrowCursor)
+            event.accept()
+            return
+        super().keyReleaseEvent(event)
+
     def contextMenuEvent(self, event):
-        """畫布空白處右鍵選單：新增鍵盤、滑鼠、手把、等待、雙輸出分支等節點"""
+        """畫布空白處右鍵選單 (若為拖曳平移則忽略)"""
+        if getattr(self, "_suppress_context_menu", False):
+            self._suppress_context_menu = False
+            event.accept()
+            return
+        self._show_canvas_context_menu(event.globalPos(), event.pos())
+
+    def _show_canvas_context_menu(self, global_pos: QPoint, local_pos: QPoint):
+        """彈出畫布空白處右鍵選單：新增鍵盤、滑鼠、手把、等待、雙輸出分支等節點"""
         menu = QMenu(self)
         menu.setStyleSheet("""
             QMenu {
@@ -1178,8 +1275,8 @@ class AovGraphArea(QWidget):
 
         # 記錄右鍵點擊的畫布座標（吸附網格）
         zoom = getattr(self._canvas, "_zoom_factor", 1.0) if self._canvas else 1.0
-        click_world_x = round((event.pos().x() / zoom) / GRID_SIZE) * GRID_SIZE
-        click_world_y = round((event.pos().y() / zoom) / GRID_SIZE) * GRID_SIZE
+        click_world_x = round((local_pos.x() / zoom) / GRID_SIZE) * GRID_SIZE
+        click_world_y = round((local_pos.y() / zoom) / GRID_SIZE) * GRID_SIZE
 
         # ── 1. 鍵盤動作 ──
         menu_kb = menu.addMenu("⌨️  新增鍵盤動作...")
@@ -1227,7 +1324,7 @@ class AovGraphArea(QWidget):
         act_zoom_reset = menu.addAction("🔍  重置畫布縮放 (100%)")
         act_zoom_reset.triggered.connect(lambda: self._canvas.apply_zoom(1.0, QPoint(0, 0)) if self._canvas else None)
 
-        menu.exec(event.globalPos())
+        menu.exec(global_pos)
 
     def _align_all_nodes_horizontal(self):
         """將畫布上所有節點統一水平打直對齊至同一基準線 (150.0 或第一節點的 Y)"""
@@ -1252,28 +1349,31 @@ class AovGraphArea(QWidget):
         if self._canvas:
             self._canvas.add_node_at_pos_requested.emit(node_type, x, y)
 
-    # ── 畫布繪製：深色網格窗格 + 所有箭頭連線 + 拖曳中拉線 ────
+    # ── 畫布繪製：深色網格窗格 (Dirty Rect 優化) + 所有箭頭連線 + 拖曳中拉線 ────
     def paintEvent(self, event):
         painter = QPainter(self)
         try:
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-            w = self.width()
-            h = self.height()
-
-            # ── 1. 繪製深色科技網格窗格 (Grid Pattern) ─────────────
-            painter.fillRect(0, 0, w, h, QColor("#08080f"))
+            # 🎯 draw.io 無限網格視口裁剪優化 (Dirty Rect Clipping)
+            # 僅繪製當前視口更新區域內的網格線，繪製運算永遠為 O(1)，超大畫布完全不掉幀！
+            clip_rect = event.rect()
+            painter.fillRect(clip_rect, QColor("#08080f"))
 
             pen_grid_fine = QPen(QColor("#131320"), 1, Qt.PenStyle.SolidLine)
             pen_grid_major = QPen(QColor("#1e1e32"), 1.2, Qt.PenStyle.SolidLine)
 
-            for x in range(0, w, GRID_SIZE):
+            start_x = (clip_rect.left() // GRID_SIZE) * GRID_SIZE
+            end_x = clip_rect.right() + GRID_SIZE + 1
+            for x in range(start_x, end_x, GRID_SIZE):
                 painter.setPen(pen_grid_major if x % 100 == 0 else pen_grid_fine)
-                painter.drawLine(x, 0, x, h)
+                painter.drawLine(x, clip_rect.top(), x, clip_rect.bottom())
 
-            for y in range(0, h, GRID_SIZE):
+            start_y = (clip_rect.top() // GRID_SIZE) * GRID_SIZE
+            end_y = clip_rect.bottom() + GRID_SIZE + 1
+            for y in range(start_y, end_y, GRID_SIZE):
                 painter.setPen(pen_grid_major if y % 100 == 0 else pen_grid_fine)
-                painter.drawLine(0, y, w, y)
+                painter.drawLine(clip_rect.left(), y, clip_rect.right(), y)
 
             # ── 2. 繪製所有固定連線與導向箭頭 ─────────────────────
             self._drawn_edges = []
@@ -1574,14 +1674,101 @@ class HorizontalAovCanvas(QScrollArea):
             }}
         """)
 
-        # 縮放比例與平移畫布主體
+        # 縮放比例與無限畫布尺寸管理 (draw.io 級動態自適應畫布)
         self._zoom_factor: float = 1.0
+        self._base_w: float = 12000.0  # 初始超寬廣畫布基礎寬度 (隨節點/滾動動態無限擴展)
+        self._base_h: float = 8000.0   # 初始超寬廣畫布基礎高度
+
         self._graph_area = AovGraphArea(self)
         self.setWidget(self._graph_area)
+        self._update_graph_area_size()
 
         self._nodes: List[MacroNode] = []
         self._items: List[HorizontalAovNodeItem] = []
         self._selected_item: Optional[HorizontalAovNodeItem] = None
+
+        # 🎯 監聽滾動條：當使用者平移或滾動靠近畫布邊緣時，自動且無縫地向外延伸畫布 (無限畫布)
+        self.horizontalScrollBar().valueChanged.connect(self._on_scroll_changed)
+        self.verticalScrollBar().valueChanged.connect(self._on_scroll_changed)
+
+    def _on_scroll_changed(self):
+        """當視口滾動接近邊界時，自動向外擴展畫布，讓使用者永遠碰不到畫布邊緣"""
+        hbar = self.horizontalScrollBar()
+        vbar = self.verticalScrollBar()
+        zoom = self._zoom_factor if self._zoom_factor > 0 else 1.0
+        vp_w = self.viewport().width()
+        vp_h = self.viewport().height()
+
+        vis_right = (hbar.value() + vp_w) / zoom
+        vis_bottom = (vbar.value() + vp_h) / zoom
+
+        need_expand = False
+        if vis_right > self._base_w - 2000:
+            self._base_w += 4000.0
+            need_expand = True
+        if vis_bottom > self._base_h - 2000:
+            self._base_h += 3000.0
+            need_expand = True
+
+        if need_expand:
+            self._update_graph_area_size()
+
+    def ensure_canvas_bounds(self, target_world_x: float = 0.0, target_world_y: float = 0.0):
+        """確保畫布能完整容納目標世界座標並在右方/下方保留 3500px 以上的富餘空間"""
+        max_x = max([getattr(it.node, "pos_x", 0.0) for it in self._items] + [target_world_x, 0.0])
+        max_y = max([getattr(it.node, "pos_y", 0.0) for it in self._items] + [target_world_y, 0.0])
+
+        req_w = max(self._base_w, max_x + 3500.0)
+        req_h = max(self._base_h, max_y + 3000.0)
+
+        if req_w > self._base_w or req_h > self._base_h:
+            self._base_w = req_w
+            self._base_h = req_h
+            self._update_graph_area_size()
+
+    def check_expand_left_top(self, placed_x: float, placed_y: float) -> Tuple[float, float]:
+        """
+        🎯 draw.io 向左/向上無限擴展核心：
+        若節點被拖曳至靠近左側或頂部邊緣 (<150px)，自動向左/向上開闢空間並將全體世界座標平移，
+        同時精準補償滾動條，畫面在使用者眼中絲毫不晃動，但左方/上方立刻獲得寬廣的全新作圖區域！
+        """
+        shift_x = 0.0
+        shift_y = 0.0
+        if placed_x < 150.0:
+            shift_x = 1200.0
+        if placed_y < 150.0:
+            shift_y = 1000.0
+
+        if shift_x > 0.0 or shift_y > 0.0:
+            zoom = self._zoom_factor
+            for it in self._items:
+                it.node.pos_x += shift_x
+                it.node.pos_y += shift_y
+                it.move(int(it.node.pos_x * zoom), int(it.node.pos_y * zoom))
+
+            self._base_w += shift_x
+            self._base_h += shift_y
+            self._update_graph_area_size()
+
+            hbar = self.horizontalScrollBar()
+            vbar = self.verticalScrollBar()
+            hbar.setValue(int(hbar.value() + shift_x * zoom))
+            vbar.setValue(int(vbar.value() + shift_y * zoom))
+
+            placed_x += shift_x
+            placed_y += shift_y
+            self.macro_modified.emit()
+
+        return placed_x, placed_y
+
+    def _update_graph_area_size(self):
+        """根據當前基礎尺寸與縮放比動態設定畫布 Widget 實體大小"""
+        zoom = self._zoom_factor if self._zoom_factor > 0 else 1.0
+        nw = int(self._base_w * zoom)
+        nh = int(self._base_h * zoom)
+        self._graph_area.setMinimumSize(nw, nh)
+        self._graph_area.resize(nw, nh)
+        self._graph_area.update()
 
     # ── 滾輪放大縮小 (Mouse Wheel Zoom) ───────────────────────
     def wheelEvent(self, event: QWheelEvent):
@@ -1592,9 +1779,9 @@ class HorizontalAovCanvas(QScrollArea):
 
         old_zoom = self._zoom_factor
         if delta > 0:
-            new_zoom = min(2.2, old_zoom * 1.12)
+            new_zoom = min(2.5, old_zoom * 1.12)
         else:
-            new_zoom = max(0.55, old_zoom / 1.12)
+            new_zoom = max(0.45, old_zoom / 1.12)
 
         if abs(new_zoom - old_zoom) > 1e-4:
             self.apply_zoom(new_zoom, event.position().toPoint())
@@ -1605,9 +1792,7 @@ class HorizontalAovCanvas(QScrollArea):
         old_zoom = self._zoom_factor
         self._zoom_factor = new_zoom
 
-        base_w, base_h = 3600, 2600
-        self._graph_area.setMinimumSize(int(base_w * new_zoom), int(base_h * new_zoom))
-        self._graph_area.resize(int(base_w * new_zoom), int(base_h * new_zoom))
+        self._update_graph_area_size()
 
         # 錨定滑鼠指針下的內容座標
         hbar = self.horizontalScrollBar()
@@ -1659,6 +1844,7 @@ class HorizontalAovCanvas(QScrollArea):
         for i, n in enumerate(nodes):
             self._create_item(n, i, total)
 
+        self.ensure_canvas_bounds()
         self._graph_area.update()
 
     def add_node_live(self, node: MacroNode):
@@ -1681,6 +1867,9 @@ class HorizontalAovCanvas(QScrollArea):
 
         if node not in self._nodes:
             self._nodes.append(node)
+
+        # 🎯 draw.io 無限畫布：動態擴充畫布邊界
+        self.ensure_canvas_bounds(node.pos_x, node.pos_y)
 
         item = self._create_item(node, len(self._items), total)
         for i, it in enumerate(self._items):
